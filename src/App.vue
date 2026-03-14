@@ -4,6 +4,7 @@ import AppWindow            from './components/AppWindow.vue'
 import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
 import Desmos               from './components/Desmos.vue'
+import DrawingBoard         from './components/DrawingBoard.vue'
 
 const now = ref(new Date())
 let timer = null
@@ -53,6 +54,17 @@ const tools = [
     windowIcon: '📈',
     width: 1000,
     height: 640,
+  },
+  {
+    id: 'drawing',
+    name: '画板',
+    icon: '🎨',
+    gradient: 'linear-gradient(135deg,#d97706,#dc2626)',
+    component: DrawingBoard,
+    windowTitle: '画板',
+    windowIcon: '🎨',
+    width: 900,
+    height: 620,
   },
 ]
 
