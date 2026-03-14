@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
+import Desmos               from './components/Desmos.vue'
 
 const now = ref(new Date())
 let timer = null
@@ -41,6 +42,17 @@ const tools = [
     windowIcon: '🧮',
     width: 520,
     height: 620,
+  },
+  {
+    id: 'desmos',
+    name: 'Desmos',
+    icon: '📈',
+    gradient: 'linear-gradient(135deg,#0a7ea4,#05c3de)',
+    component: Desmos,
+    windowTitle: 'Desmos 图形计算器',
+    windowIcon: '📈',
+    width: 1000,
+    height: 640,
   },
 ]
 
