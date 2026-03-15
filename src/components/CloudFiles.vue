@@ -1,16 +1,17 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
 
 // ── state ──
+const openPDFViewer = inject('openPDFViewer')
+const openFileViewer = inject('openFileViewer')
 const files = ref([])
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
 const viewMode = ref(localStorage.getItem('cloudfiles-view') || 'list')
 
-// preview
-const preview = ref(null)   // { file, textContent }
-const previewLoading = ref(false)
+// preview (for unsupported file types)
+const preview = ref(null)
 
 // rename
 const renaming = ref(null)  // file name being renamed
@@ -56,6 +57,8 @@ function fileTypeIcon(mime) {
   if (mime.includes('zip') || mime.includes('tar') || mime.includes('gzip') || mime.includes('rar') || mime.includes('7z')) return '📦'
   return '📄'
 }
+
+function isPDF(mime) { return mime && mime.includes('pdf') }
 
 function isImage(mime) { return mime && mime.startsWith('image/') }
 function isText(mime) {
@@ -117,6 +120,13 @@ async function deleteFile(name) {
   }
 }
 
+function downloadFile(file) {
+  const link = document.createElement('a')
+  link.href = `/api/files/raw/${encodeURIComponent(file.name)}`
+  link.download = file.name
+  link.click()
+}
+
 function startRename(name) {
   renaming.value = name
   renameVal.value = name
@@ -141,18 +151,26 @@ async function confirmRename(oldName) {
 }
 
 async function openPreview(file) {
-  preview.value = { file, textContent: null }
-  if (isText(file.mime)) {
-    previewLoading.value = true
-    try {
-      const res = await fetch(`/api/files/raw/${encodeURIComponent(file.name)}`)
-      preview.value.textContent = await res.text()
-    } catch {
-      preview.value.textContent = '(无法加载内容)'
-    } finally {
-      previewLoading.value = false
+  const fileUrl = `/api/files/raw/${encodeURIComponent(file.name)}`
+
+  // Open PDF in PDF viewer
+  if (isPDF(file.mime)) {
+    if (openPDFViewer) {
+      openPDFViewer(fileUrl, file.name)
     }
+    return
   }
+
+  // Open image, text, video, audio in file viewer
+  if (isImage(file.mime) || isText(file.mime) || isVideo(file.mime) || isAudio(file.mime)) {
+    if (openFileViewer) {
+      openFileViewer(fileUrl, file.name, file.mime)
+    }
+    return
+  }
+
+  // For other file types, show preview modal
+  preview.value = { file }
 }
 
 function closePreview() { preview.value = null }
@@ -217,6 +235,7 @@ onMounted(fetchFiles)
     <!-- list view -->
     <div v-else-if="viewMode === 'list'" class="cf-list">
       <div class="cf-list-header">
+        <span class="col-icon"></span>
         <span class="col-name">文件名</span>
         <span class="col-size">大小</span>
         <span class="col-time">修改时间</span>
@@ -244,6 +263,7 @@ onMounted(fetchFiles)
         <span class="col-size">{{ formatSize(file.size) }}</span>
         <span class="col-time">{{ formatDate(file.mtime) }}</span>
         <span class="col-ops">
+          <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
           <button class="cf-op-btn" @click="startRename(file.name)" title="重命名">✏</button>
           <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除">🗑</button>
         </span>
@@ -274,6 +294,7 @@ onMounted(fetchFiles)
           </template>
           <span v-else class="cf-grid-name" @click="openPreview(file)" :title="file.name">{{ file.name }}</span>
           <div class="cf-grid-ops">
+            <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
             <button class="cf-op-btn" @click="startRename(file.name)" title="重命名">✏</button>
             <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除">🗑</button>
           </div>
@@ -286,7 +307,7 @@ onMounted(fetchFiles)
       <div class="cf-drag-text">释放以上传文件</div>
     </div>
 
-    <!-- preview modal -->
+    <!-- preview modal for unsupported files -->
     <div class="cf-modal-backdrop" v-if="preview" @click.self="closePreview">
       <div class="cf-modal">
         <div class="cf-modal-header">
@@ -294,29 +315,7 @@ onMounted(fetchFiles)
           <button class="cf-modal-close" @click="closePreview">✕</button>
         </div>
         <div class="cf-modal-body">
-          <div v-if="previewLoading" class="cf-preview-loading">加载中…</div>
-          <img
-            v-else-if="isImage(preview.file.mime)"
-            :src="`/api/files/raw/${encodeURIComponent(preview.file.name)}`"
-            class="cf-preview-img"
-          />
-          <pre
-            v-else-if="isText(preview.file.mime)"
-            class="cf-preview-text"
-          >{{ preview.textContent }}</pre>
-          <video
-            v-else-if="isVideo(preview.file.mime)"
-            :src="`/api/files/raw/${encodeURIComponent(preview.file.name)}`"
-            controls
-            class="cf-preview-video"
-          />
-          <audio
-            v-else-if="isAudio(preview.file.mime)"
-            :src="`/api/files/raw/${encodeURIComponent(preview.file.name)}`"
-            controls
-            class="cf-preview-audio"
-          />
-          <div v-else class="cf-preview-unsupported">
+          <div class="cf-preview-unsupported">
             <div>{{ fileTypeIcon(preview.file.mime) }}</div>
             <div>此文件类型不支持预览</div>
             <a :href="`/api/files/raw/${encodeURIComponent(preview.file.name)}`" target="_blank" class="cf-btn primary cf-dl-link">下载文件</a>

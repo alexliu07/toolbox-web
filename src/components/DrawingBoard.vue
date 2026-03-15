@@ -9,6 +9,12 @@ const eraserSize = ref(24)
 const eraserMode = ref('area')   // 'area' | 'stroke'
 const hasSelection = ref(false)
 
+// ── save/load state ──
+const saveName = ref('')
+const saves = ref([])
+const showSaves = ref(false)
+const saveStatus = ref('')   // '' | 'saving' | 'ok' | 'err'
+
 // ── canvas / container ──
 const canvasEl    = ref(null)
 const containerEl = ref(null)
@@ -396,7 +402,69 @@ function clearAll() {
   strokes = []; liveStroke = null
   selection = new Set(); hasSelection.value = false
   lassoPath = []
+  vpX = 0; vpY = 0
   queueRender()
+}
+
+// ──────────────────────────────────────────────
+// SAVE / LOAD
+// ──────────────────────────────────────────────
+async function loadSavesList() {
+  try {
+    const res = await fetch('/api/drawings')
+    saves.value = await res.json()
+  } catch { /* ignore */ }
+}
+
+async function saveDrawing() {
+  const name = saveName.value.trim() || '未命名'
+  saveStatus.value = 'saving'
+  try {
+    const res = await fetch('/api/drawings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        strokes: strokes.map(s => ({
+          id: s.id,
+          points: s.points,
+          color: s.color,
+          width: s.width,
+          eraser: s.eraser || false
+        })),
+        viewport: { x: vpX, y: vpY }
+      }),
+    })
+    saveStatus.value = res.ok ? 'ok' : 'err'
+    if (res.ok) await loadSavesList()
+  } catch {
+    saveStatus.value = 'err'
+  }
+  setTimeout(() => { saveStatus.value = '' }, 1800)
+}
+
+async function loadDrawing(name) {
+  try {
+    const res = await fetch(`/api/drawings/${encodeURIComponent(name)}`)
+    const data = await res.json()
+    strokes = (data.strokes || []).map(s => ({ ...s, id: s.id || ++seq }))
+    if (data.viewport) { vpX = data.viewport.x || 0; vpY = data.viewport.y || 0 }
+    selection = new Set(); hasSelection.value = false
+    liveStroke = null
+    saveName.value = name
+    showSaves.value = false
+    queueRender()
+  } catch { /* ignore */ }
+}
+
+async function deleteDrawing(name) {
+  if (!confirm(`删除存档 "${name}"？`)) return
+  await fetch(`/api/drawings/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  await loadSavesList()
+}
+
+function fmtDate(iso) {
+  return iso.slice(0, 10)
 }
 
 function onKeyDown(e) {
@@ -507,6 +575,43 @@ onUnmounted(() => {
         </button>
       </template>
 
+      <div class="sep"/>
+
+      <!-- save/load -->
+      <input
+        class="save-input"
+        v-model="saveName"
+        placeholder="存档名称…"
+        @keydown.enter="saveDrawing"
+      />
+      <button
+        class="tb-btn save-btn"
+        :class="{ ok: saveStatus === 'ok', err: saveStatus === 'err' }"
+        @click="saveDrawing"
+        title="保存画板"
+      >
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 17v-10l5-4h9v14H3z"/><path d="M7 3v4h6V3"/>
+        </svg>
+        <span>{{
+          saveStatus === 'saving' ? '保存中…'
+          : saveStatus === 'ok'   ? '✓ 已保存'
+          : saveStatus === 'err'  ? '✗ 失败'
+          : '保存'
+        }}</span>
+      </button>
+      <button
+        class="tb-btn"
+        @click="showSaves = !showSaves; if(showSaves) loadSavesList()"
+        title="读取存档"
+      >
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7v10h14V7M1 4h18v3H1V4z"/><path d="M7 10h6"/>
+        </svg>
+        <span>存档</span>
+        <span class="badge" v-if="saves.length"">{{ saves.length }}</span>
+      </button>
+
       <div style="flex:1"/>
 
       <!-- clear all -->
@@ -517,6 +622,17 @@ onUnmounted(() => {
         <span>清空</span>
       </button>
 
+    </div>
+
+    <!-- ── saves panel ── -->
+    <div class="saves-panel" v-if="showSaves">
+      <div v-if="saves.length === 0" class="saves-empty">暂无存档</div>
+      <div v-for="s in saves" :key="s.name" class="save-row">
+        <span class="save-name" :title="s.name">{{ s.name }}</span>
+        <span class="save-date">{{ fmtDate(s.mtime) }}</span>
+        <button class="tb-btn sm" @click="loadDrawing(s.name)">加载</button>
+        <button class="tb-btn sm danger" @click="deleteDrawing(s.name)">删除</button>
+      </div>
     </div>
 
     <!-- ── canvas ── -->
@@ -587,6 +703,63 @@ onUnmounted(() => {
 }
 .seg-ctrl button:hover:not(.active) { background: rgba(255,255,255,0.05); color: rgba(230,237,243,0.7); }
 .seg-ctrl button.active { background: rgba(56,189,248,0.15); color: #38bdf8; }
+
+/* ── save/load UI ── */
+.save-input {
+  padding: 4px 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  background: rgba(0,0,0,0.25);
+  color: #e6edf3;
+  font-size: 12px;
+  outline: none;
+  width: 120px;
+}
+.save-input:focus { border-color: #38bdf8; }
+.save-input::placeholder { color: rgba(230,237,243,0.3); }
+
+.tb-btn.save-btn.ok { color: #4ade80; }
+.tb-btn.save-btn.err { color: #f87171; }
+
+.badge {
+  background: rgba(56,189,248,0.25);
+  border-radius: 8px;
+  padding: 0 5px;
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+.saves-panel {
+  background: #1a1f26;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  max-height: 160px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.saves-panel::-webkit-scrollbar { width: 4px; }
+.saves-panel::-webkit-scrollbar-thumb { background: #3e4856; border-radius: 2px; }
+
+.saves-empty {
+  padding: 12px;
+  color: rgba(230,237,243,0.35);
+  font-size: 13px;
+  text-align: center;
+}
+
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-size: 13px;
+  transition: background 0.12s;
+}
+.save-row:hover { background: rgba(255,255,255,0.04); }
+.save-name { flex: 1; color: #e6edf3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.save-date { color: rgba(230,237,243,0.4); font-size: 11px; flex-shrink: 0; }
+
+.tb-btn.sm { padding: 3px 8px; min-width: auto; font-size: 11px; }
 
 /* ── canvas ── */
 .canvas-wrap {

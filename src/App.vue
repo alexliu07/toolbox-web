@@ -1,11 +1,13 @@
 <script setup>
-import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
 import Desmos               from './components/Desmos.vue'
 import DrawingBoard         from './components/DrawingBoard.vue'
 import CloudFiles           from './components/CloudFiles.vue'
+import PDFViewer            from './components/PDFViewer.vue'
+import FileViewer           from './components/FileViewer.vue'
 
 const now = ref(new Date())
 let timer = null
@@ -81,8 +83,12 @@ const tools = [
 ]
 
 // ── open windows ──
-const openWindows = ref([])    // array of { id, toolId, tool, zIndex }
+const openWindows = ref([])      // array of { id, toolId, tool, zIndex }
+const pdfWindows = ref([])       // array of { id, pdfUrl, title, zIndex }
+const fileWindows = ref([])      // array of { id, fileUrl, fileName, mimeType, zIndex }
 let winSeq = 0
+let pdfWinSeq = 0
+let fileWinSeq = 0
 let zCounter = 1000
 
 function openTool(tool) {
@@ -95,10 +101,61 @@ function closeWindow(winId) {
   openWindows.value = openWindows.value.filter(w => w.id !== winId)
 }
 
+function closePDFWindow(winId) {
+  pdfWindows.value = pdfWindows.value.filter(w => w.id !== winId)
+}
+
+function closeFileWindow(winId) {
+  fileWindows.value = fileWindows.value.filter(w => w.id !== winId)
+}
+
 function bringToFront(winId) {
   const win = openWindows.value.find(w => w.id === winId)
   if (win) win.zIndex = ++zCounter
 }
+
+function bringPDFToFront(winId) {
+  const win = pdfWindows.value.find(w => w.id === winId)
+  if (win) win.zIndex = ++zCounter
+}
+
+function bringFileToFront(winId) {
+  const win = fileWindows.value.find(w => w.id === winId)
+  if (win) win.zIndex = ++zCounter
+}
+
+// Open PDF in new window
+function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
+  pdfWindows.value.push({
+    id: ++pdfWinSeq,
+    pdfUrl,
+    title: title.length > 40 ? title.slice(0, 37) + '...' : title,
+    zIndex: ++zCounter
+  })
+}
+
+// Open file in new window (image, text, video, audio)
+function openFileViewer(fileUrl, fileName, mimeType) {
+  // Determine icon based on mime type
+  let icon = '📄'
+  if (mimeType?.startsWith('image/')) icon = '🖼'
+  else if (mimeType?.startsWith('video/')) icon = '🎬'
+  else if (mimeType?.startsWith('audio/')) icon = '🎵'
+  else if (mimeType?.startsWith('text/')) icon = '📝'
+
+  fileWindows.value.push({
+    id: ++fileWinSeq,
+    fileUrl,
+    fileName: fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName,
+    mimeType,
+    icon,
+    zIndex: ++zCounter
+  })
+}
+
+// Provide functions to child components
+provide('openPDFViewer', openPDFViewer)
+provide('openFileViewer', openFileViewer)
 
 onMounted(() => {
   timer = setInterval(() => { now.value = new Date() }, 1000)
@@ -161,6 +218,40 @@ onUnmounted(() => clearInterval(timer))
       @raise="bringToFront(win.id)"
     >
       <component :is="win.tool.component" />
+    </AppWindow>
+
+    <!-- PDF 查看器窗口层 -->
+    <AppWindow
+      v-for="win in pdfWindows"
+      :key="'pdf-' + win.id"
+      :title="win.title"
+      icon="📄"
+      :initial-width="900"
+      :initial-height="700"
+      :zIndex="win.zIndex"
+      @close="closePDFWindow(win.id)"
+      @raise="bringPDFToFront(win.id)"
+    >
+      <PDFViewer :pdfUrl="win.pdfUrl" />
+    </AppWindow>
+
+    <!-- 文件预览窗口层 (图片、文本、视频、音频) -->
+    <AppWindow
+      v-for="win in fileWindows"
+      :key="'file-' + win.id"
+      :title="win.fileName"
+      :icon="win.icon"
+      :initial-width="800"
+      :initial-height="600"
+      :zIndex="win.zIndex"
+      @close="closeFileWindow(win.id)"
+      @raise="bringFileToFront(win.id)"
+    >
+      <FileViewer
+        :fileUrl="win.fileUrl"
+        :fileName="win.fileName"
+        :mimeType="win.mimeType"
+      />
     </AppWindow>
   </div>
 </template>
