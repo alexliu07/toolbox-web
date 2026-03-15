@@ -5,6 +5,7 @@ import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
 import Desmos               from './components/Desmos.vue'
 import DrawingBoard         from './components/DrawingBoard.vue'
+import CloudFiles           from './components/CloudFiles.vue'
 
 const now = ref(new Date())
 let timer = null
@@ -65,6 +66,17 @@ const tools = [
     windowIcon: '🎨',
     width: 900,
     height: 620,
+  },
+  {
+    id: 'cloudfiles',
+    name: '云文件',
+    icon: '☁️',
+    gradient: 'linear-gradient(135deg,#0f4c81,#1a8fe3)',
+    component: CloudFiles,
+    windowTitle: '云文件管理',
+    windowIcon: '☁️',
+    width: 900,
+    height: 600,
   },
 ]
 

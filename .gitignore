@@ -39,3 +39,7 @@ __screenshots__/
 *.timestamp-*-*.mjs
 /test
 /.vscode/
+
+# cloud files storage
+server/storage/*
+!server/storage/.gitkeep

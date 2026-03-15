@@ -4,15 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node server/index.js\"",
+    "server": "node server/index.js",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "mime-types": "^2.1.35",
+    "multer": "^1.4.5-lts.1",
     "vue": "^3.5.29"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.4",
+    "concurrently": "^9.1.2",
     "vite": "^7.3.1",
     "vite-plugin-vue-devtools": "^8.0.6"
   },
