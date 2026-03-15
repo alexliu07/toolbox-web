@@ -13,6 +13,7 @@ const hasSelection = ref(false)
 const canvasEl    = ref(null)
 const containerEl = ref(null)
 let ctx = null
+let resizeObs = null
 
 // ── viewport ──
 let vpX = 0, vpY = 0
@@ -409,9 +410,8 @@ function onKeyDown(e) {
 // ──────────────────────────────────────────────
 function resizeCanvas() {
   if (!canvasEl.value || !containerEl.value) return
-  const r = containerEl.value.getBoundingClientRect()
-  canvasEl.value.width  = r.width
-  canvasEl.value.height = r.height
+  canvasEl.value.width  = containerEl.value.offsetWidth
+  canvasEl.value.height = containerEl.value.offsetHeight
   queueRender()
 }
 
@@ -420,12 +420,15 @@ const canvasCursor = computed(() => tool.value === 'pan' ? 'grab' : 'crosshair')
 onMounted(() => {
   ctx = canvasEl.value.getContext('2d')
   resizeCanvas()
-  window.addEventListener('resize', resizeCanvas)
+  resizeObs = new ResizeObserver(resizeCanvas)
+  resizeObs.observe(containerEl.value)
+  // AppWindow 开场动画约 280ms，动画结束后补测一次确保尺寸正确
+  setTimeout(resizeCanvas, 320)
   window.addEventListener('mouseup', onUp)
   window.addEventListener('keydown', onKeyDown)
 })
 onUnmounted(() => {
-  window.removeEventListener('resize', resizeCanvas)
+  resizeObs?.disconnect()
   window.removeEventListener('mouseup', onUp)
   window.removeEventListener('keydown', onKeyDown)
 })
@@ -532,7 +535,7 @@ onUnmounted(() => {
 
 <style scoped>
 .board-root {
-  width: 100%; height: 100%;
+  position: absolute; inset: 0;
   display: flex; flex-direction: column;
   background: #f0f0f0;
   font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
