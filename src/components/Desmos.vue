@@ -13,18 +13,34 @@ let pollTimer = null
 
 function onIframeLoad() {
   pollTimer = setInterval(() => {
-    const calc = iframeRef.value?.contentWindow?.__desmos_calc
+    const calc = getCalc()
     if (calc) {
       clearInterval(pollTimer)
       calcReady.value = true
       loadSavesList()
     }
-  }, 200)
-  setTimeout(() => clearInterval(pollTimer), 12000)
+  }, 300)
+  setTimeout(() => clearInterval(pollTimer), 15000)
 }
 
 function getCalc() {
-  return iframeRef.value?.contentWindow?.__desmos_calc ?? null
+  const iwin = iframeRef.value?.contentWindow
+  if (!iwin) return null
+  // Check known locations first
+  for (const key of ['__desmos_calc', 'Calc', 'calc', 'calculator']) {
+    try { if (iwin[key]?.getState && iwin[key]?.setState) return iwin[key] } catch {}
+  }
+  // Broad duck-type search as fallback
+  for (const key of Object.getOwnPropertyNames(iwin)) {
+    try {
+      const v = iwin[key]
+      if (v && typeof v === 'object' && !Array.isArray(v) &&
+          typeof v.getState === 'function' &&
+          typeof v.setState === 'function' &&
+          typeof v.setExpression === 'function') return v
+    } catch {}
+  }
+  return null
 }
 
 // ── saves API ──
@@ -93,7 +109,7 @@ onUnmounted(() => { clearInterval(pollTimer) })
       />
       <button
         class="dbar-btn primary"
-        :disabled="!calcReady"
+        :disabled="false"
         @click="saveGraph"
       >
         {{

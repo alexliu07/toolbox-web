@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
@@ -28,7 +28,7 @@ const tools = [
     name: '小恐龙',
     icon: '🦕',
     gradient: 'linear-gradient(135deg,#3a8c5c,#1d5e3a)',
-    component: DinoGame,
+    component: markRaw(DinoGame),
     windowTitle: 'Chrome Dino',
     windowIcon: '🦕',
     width: 800,
@@ -39,7 +39,7 @@ const tools = [
     name: '科学计算器',
     icon: '🧮',
     gradient: 'linear-gradient(135deg,#4f46e5,#7c3aed)',
-    component: ScientificCalculator,
+    component: markRaw(ScientificCalculator),
     windowTitle: '科学计算器',
     windowIcon: '🧮',
     width: 520,
@@ -50,7 +50,7 @@ const tools = [
     name: 'Desmos',
     icon: '📈',
     gradient: 'linear-gradient(135deg,#0a7ea4,#05c3de)',
-    component: Desmos,
+    component: markRaw(Desmos),
     windowTitle: 'Desmos 图形计算器',
     windowIcon: '📈',
     width: 1000,
@@ -61,7 +61,7 @@ const tools = [
     name: '画板',
     icon: '🎨',
     gradient: 'linear-gradient(135deg,#d97706,#dc2626)',
-    component: DrawingBoard,
+    component: markRaw(DrawingBoard),
     windowTitle: '画板',
     windowIcon: '🎨',
     width: 900,
@@ -72,7 +72,7 @@ const tools = [
     name: '云文件',
     icon: '☁️',
     gradient: 'linear-gradient(135deg,#0f4c81,#1a8fe3)',
-    component: CloudFiles,
+    component: markRaw(CloudFiles),
     windowTitle: '云文件管理',
     windowIcon: '☁️',
     width: 900,

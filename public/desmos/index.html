@@ -143,7 +143,7 @@
             }
         </script>
         <script>
-            // MUST run before the main JS so we intercept when it assigns Desmos.GraphingCalculator
+            // Method 1: intercept constructor assignment (before main JS)
             (function() {
                 Object.defineProperty(Desmos, 'GraphingCalculator', {
                     configurable: true, enumerable: true,
@@ -162,6 +162,31 @@
             })();
         </script>
         <script src="shared_calculator_desktop-ccd14ffa0010416cdff11388b8d6aa1818fed511.js"></script>
+        <script>
+            // Method 2: duck-type search after main JS runs (fallback if Method 1 missed)
+            document.addEventListener('DOMContentLoaded', function() {
+                if (window.__desmos_calc) return;
+                var attempts = 0;
+                var t = setInterval(function() {
+                    attempts++;
+                    var names = Object.getOwnPropertyNames(window);
+                    for (var i = 0; i < names.length; i++) {
+                        try {
+                            var v = window[names[i]];
+                            if (v && typeof v === 'object' && !Array.isArray(v) &&
+                                typeof v.getState === 'function' &&
+                                typeof v.setState === 'function' &&
+                                typeof v.setExpression === 'function') {
+                                window.__desmos_calc = v;
+                                clearInterval(t);
+                                return;
+                            }
+                        } catch(e) {}
+                    }
+                    if (attempts >= 30) clearInterval(t);
+                }, 500);
+            });
+        </script>
         <script>
             var _paq = (window._paq = window._paq || []);
             var paqTest = (window.paqTest = window.paqTest || []);
