@@ -15,14 +15,15 @@ fs.mkdirSync(STORAGE_DIR, { recursive: true })
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, STORAGE_DIR),
   filename: (_req, file, cb) => {
-    // if file with same name exists, prefix with timestamp
-    const target = path.join(STORAGE_DIR, file.originalname)
+    // multer decodes originalname as latin1; re-encode to utf8 for CJK filenames
+    const name = Buffer.from(file.originalname, 'latin1').toString('utf8')
+    const target = path.join(STORAGE_DIR, name)
     if (fs.existsSync(target)) {
-      const ext = path.extname(file.originalname)
-      const base = path.basename(file.originalname, ext)
+      const ext = path.extname(name)
+      const base = path.basename(name, ext)
       cb(null, `${base}_${Date.now()}${ext}`)
     } else {
-      cb(null, file.originalname)
+      cb(null, name)
     }
   },
 })

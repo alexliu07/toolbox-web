@@ -114,7 +114,7 @@ function applyFn(fn) {
   const r = fmt(result)
   exprLine.value = label
   history.value.unshift({ expr: label, result: r })
-  if (history.value.length > 60) history.value.pop()
+  if (history.value.length > 20) history.value.pop()
   display.value = r
   evaluated.value = true
 }
@@ -127,7 +127,7 @@ function equals() {
   const r    = fmt(calc(expr))
   exprLine.value = expr
   history.value.unshift({ expr, result: r })
-  if (history.value.length > 60) history.value.pop()
+  if (history.value.length > 20) history.value.pop()
   display.value = r
   evaluated.value = true
 }

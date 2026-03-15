@@ -51,3 +51,4 @@ server/data/*
 # desmos graph saves
 server/desmos-saves/*
 !server/desmos-saves/.gitkeep
+/.claude/

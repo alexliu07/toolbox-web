@@ -32921,7 +32921,7 @@ l10n-internal-time = {DATETIME($d, minute: "numeric", hour: "numeric")}
                 }
         }
         try {
-            let e = await Re.get(`/api/v1/calculator/language/${r}.ftl`);
+            let e = await Re.get(`lang/${r}.ftl`);
             return Xg[r] = e[r],
             sL(Xg),
             dk(r),
