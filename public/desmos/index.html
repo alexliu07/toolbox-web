@@ -144,6 +144,25 @@
         </script>
         <script src="shared_calculator_desktop-ccd14ffa0010416cdff11388b8d6aa1818fed511.js"></script>
         <script>
+            // Intercept Desmos.GraphingCalculator to capture the instance for same-origin parent access
+            (function() {
+                Object.defineProperty(Desmos, 'GraphingCalculator', {
+                    configurable: true, enumerable: true,
+                    get: function() { return this._GC; },
+                    set: function(fn) {
+                        var self = this;
+                        self._GC = function() {
+                            var c = fn.apply(this, arguments);
+                            if (c && typeof c.getState === 'function') window.__desmos_calc = c;
+                            return c;
+                        };
+                        self._GC.prototype = fn.prototype;
+                        Object.assign(self._GC, fn);
+                    }
+                });
+            })();
+        </script>
+        <script>
             var _paq = (window._paq = window._paq || []);
             var paqTest = (window.paqTest = window.paqTest || []);
             _paq.push(['disableCookies']);

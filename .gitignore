@@ -47,3 +47,7 @@ server/storage/*
 # app data (high scores, history, etc.)
 server/data/*
 !server/data/.gitkeep
+
+# desmos graph saves
+server/desmos-saves/*
+!server/desmos-saves/.gitkeep
