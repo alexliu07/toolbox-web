@@ -1,10 +1,66 @@
+<script setup>
+import { ref, onMounted, onUnmounted } from 'vue'
+
+const iframeRef = ref(null)
+const iframeLoaded = ref(false)
+let savedScore = 0
+
+async function loadHighScore() {
+  try {
+    const res = await fetch('/api/data/dino-highscore')
+    const data = await res.json()
+    if (data && data.score > 0) savedScore = data.score
+  } catch { /* ignore */ }
+}
+
+async function saveHighScore(score) {
+  try {
+    await fetch('/api/data/dino-highscore', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score }),
+    })
+  } catch { /* ignore */ }
+}
+
+function sendScoreToIframe() {
+  if (savedScore > 0 && iframeRef.value?.contentWindow) {
+    iframeRef.value.contentWindow.postMessage({ type: 'setHighScore', score: savedScore }, '*')
+  }
+}
+
+function onIframeLoad() {
+  iframeLoaded.value = true
+  sendScoreToIframe()
+}
+
+function onMessage(e) {
+  if (e.data?.type === 'newHighScore' && e.data.score > 0) {
+    saveHighScore(e.data.score)
+  }
+}
+
+onMounted(async () => {
+  window.addEventListener('message', onMessage)
+  await loadHighScore()
+  // If iframe already loaded before API responded, send now
+  if (iframeLoaded.value) sendScoreToIframe()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('message', onMessage)
+})
+</script>
+
 <template>
   <iframe
+    ref="iframeRef"
     src="/dino/index.html"
     class="dino-frame"
     frameborder="0"
     scrolling="no"
     allowtransparency="true"
+    @load="onIframeLoad"
   />
 </template>
 

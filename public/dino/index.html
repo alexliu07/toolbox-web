@@ -104,7 +104,34 @@
   <script src="index.js"></script>
   <script>
     document.addEventListener('DOMContentLoaded', function() {
-      new Runner('.interstitial-wrapper');
+      var runner = new Runner('.interstitial-wrapper');
+
+      // Inject saved high score from parent (retries until distanceMeter is ready)
+      function trySetHighScore(score) {
+        if (runner && runner.distanceMeter) {
+          runner.highestScore = score;
+          runner.distanceMeter.setHighScore(score);
+        } else {
+          setTimeout(function() { trySetHighScore(score); }, 100);
+        }
+      }
+
+      window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'setHighScore') {
+          var score = parseInt(e.data.score, 10);
+          if (score > 0) trySetHighScore(score);
+        }
+      });
+
+      // Notify parent whenever a new high score is achieved
+      var lastReported = 0;
+      setInterval(function() {
+        if (runner && runner.highestScore > lastReported) {
+          lastReported = runner.highestScore;
+          window.parent.postMessage({ type: 'newHighScore', score: runner.highestScore }, '*');
+        }
+      }, 500);
+
       document.addEventListener('click', function() {
         document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 32, key: ' ' }));
       });

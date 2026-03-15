@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 
 const display   = ref('0')
 const exprLine  = ref('')
@@ -150,6 +150,31 @@ function mAdd()    { tap('M+'); memory.value += parseFloat(display.value) || 0; 
 function mSub()    { tap('M-'); memory.value -= parseFloat(display.value) || 0; hasMemory.value = true }
 
 
+// ── backend persistence ──
+let saveTimer = null
+
+async function saveHistory() {
+  try {
+    await fetch('/api/data/calc-history', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(history.value),
+    })
+  } catch { /* ignore */ }
+}
+
+watch(history, () => {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveHistory, 800)
+}, { deep: true })
+
+async function clearHistory() {
+  history.value = []
+  clearTimeout(saveTimer)
+  saveTimer = null
+  await saveHistory()
+}
+
 // ── display font ──
 const displayFS = computed(() => {
   const l = display.value.length
@@ -181,7 +206,14 @@ function onKey(e) {
   if (k === '(' || k === ')') { paren(); return }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // Load history from backend
+  try {
+    const res = await fetch('/api/data/calc-history')
+    const data = await res.json()
+    if (Array.isArray(data) && data.length) history.value = data
+  } catch { /* ignore */ }
+
   rootEl.value.addEventListener('keydown', onKey)
   rootEl.value.focus()
 
@@ -223,7 +255,7 @@ onUnmounted(() => {
           </template>
           <div v-else class="hist-empty">暂无记录</div>
         </div>
-        <button class="hist-clr" @click="history = []">清空记录</button>
+        <button class="hist-clr" @click="clearHistory()">清空记录</button>
       </aside>
     </transition>
 

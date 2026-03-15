@@ -43,3 +43,7 @@ __screenshots__/
 # cloud files storage
 server/storage/*
 !server/storage/.gitkeep
+
+# app data (high scores, history, etc.)
+server/data/*
+!server/data/.gitkeep
