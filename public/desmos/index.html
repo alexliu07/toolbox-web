@@ -142,23 +142,26 @@
                 ;
             }
         </script>
-        <script src="shared_calculator_desktop-ccd14ffa0010416cdff11388b8d6aa1818fed511.js"></script>
         <script>
-            // Wrap Desmos.GraphingCalculator to capture the instance for same-origin parent access.
-            // This script runs after the main JS (so the function is already assigned) but before
-            // DOMContentLoaded (so the actual calculator hasn't been created yet).
+            // MUST run before the main JS so we intercept when it assigns Desmos.GraphingCalculator
             (function() {
-                var orig = Desmos.GraphingCalculator;
-                if (!orig) return;
-                Desmos.GraphingCalculator = function() {
-                    var c = orig.apply(this, arguments);
-                    if (c && typeof c.getState === 'function') window.__desmos_calc = c;
-                    return c;
-                };
-                Object.assign(Desmos.GraphingCalculator, orig);
-                Desmos.GraphingCalculator.prototype = orig.prototype;
+                Object.defineProperty(Desmos, 'GraphingCalculator', {
+                    configurable: true, enumerable: true,
+                    get: function() { return this._GC; },
+                    set: function(fn) {
+                        var wrapped = function() {
+                            var c = fn.apply(this, arguments);
+                            if (c && typeof c.getState === 'function') window.__desmos_calc = c;
+                            return c;
+                        };
+                        Object.assign(wrapped, fn);
+                        wrapped.prototype = fn.prototype;
+                        this._GC = wrapped;
+                    }
+                });
             })();
         </script>
+        <script src="shared_calculator_desktop-ccd14ffa0010416cdff11388b8d6aa1818fed511.js"></script>
         <script>
             var _paq = (window._paq = window._paq || []);
             var paqTest = (window.paqTest = window.paqTest || []);
