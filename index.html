@@ -8,6 +8,52 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      if (typeof Promise.withResolvers === 'undefined') {
+        Promise.withResolvers = function() {
+          let resolve, reject
+          const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+          return { promise, resolve, reject }
+        }
+      }
+    </script>
     <script type="module" src="/src/main.js"></script>
+    <script>
+      if (new URLSearchParams(location.search).get('debug') === '1') {
+        const panel = document.createElement('div')
+        panel.id = '_dbg'
+        Object.assign(panel.style, {
+          position: 'fixed', bottom: '0', left: '0', right: '0',
+          maxHeight: '40vh', overflowY: 'auto', background: 'rgba(0,0,0,0.92)',
+          color: '#0f0', fontFamily: 'monospace', fontSize: '11px',
+          padding: '6px', zIndex: '999999', borderTop: '1px solid #333'
+        })
+        document.body.appendChild(panel)
+
+        function log(type, args) {
+          const line = document.createElement('div')
+          line.style.color = type === 'error' ? '#f55' : type === 'warn' ? '#fa0' : '#0f0'
+          line.style.borderBottom = '1px solid #222'
+          line.style.padding = '2px 0'
+          line.textContent = '[' + type + '] ' + Array.from(args).map(a => {
+            try { return typeof a === 'object' ? JSON.stringify(a) : String(a) } catch(e) { return String(a) }
+          }).join(' ')
+          panel.appendChild(line)
+          panel.scrollTop = panel.scrollHeight
+        }
+
+        ;['log','warn','error'].forEach(t => {
+          const orig = console[t].bind(console)
+          console[t] = (...args) => { orig(...args); log(t, args) }
+        })
+
+        window.addEventListener('error', e => {
+          log('error', [e.message + ' @ ' + e.filename + ':' + e.lineno])
+        })
+        window.addEventListener('unhandledrejection', e => {
+          log('error', ['Unhandled promise rejection:', e.reason])
+        })
+      }
+    </script>
   </body>
 </html>

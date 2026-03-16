@@ -1,24 +1,25 @@
 <script setup>
 import { ref, shallowRef, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?worker&url'
+import workerUrl from '../pdf-worker-wrapper.js?worker&url'
 
-// Configure pdf.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
+// Configure pdf.js worker (wrapper includes polyfills for older WebViews)
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
 const props = defineProps({
   pdfUrl: { type: String, required: true }
 })
 
 const canvasRef = ref(null)
-const pdfDoc = shallowRef(null)  // Use shallowRef to avoid Proxy issues with pdf.js
+const contentRef = ref(null)
+const pdfDoc = shallowRef(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
-const userScale = ref(1)  // User's zoom level (1 = 100%)
-const baseFitScale = ref(1)  // Auto-fit scale calculated from first page
+const userScale = ref(1)
+const baseFitScale = ref(1)
 const loading = ref(false)
 const error = ref('')
-const renderTask = ref(null)
+const renderTask = shallowRef(null)
 
 // Load PDF
 async function loadPDF() {
@@ -34,19 +35,12 @@ async function loadPDF() {
     currentPage.value = 1
     userScale.value = 1
 
-    // Calculate base fit scale from first page (use default size first)
     const firstPage = await pdfDoc.value.getPage(1)
     const baseViewport = firstPage.getViewport({ scale: 1 })
-
-    // Use default container width, will adjust on resize
     const containerWidth = 800
-
-    // Calculate fit scale, cap at 1.5x to avoid huge pages
     baseFitScale.value = Math.min((containerWidth - 40) / baseViewport.width, 1.5)
-    // Ensure minimum scale
     if (baseFitScale.value < 0.3) baseFitScale.value = 0.3
 
-    // Wait for DOM to update
     await nextTick()
     await renderPage()
   } catch (e) {
@@ -61,7 +55,6 @@ async function loadPDF() {
 async function renderPage() {
   if (!pdfDoc.value || !canvasRef.value) return
 
-  // Cancel any ongoing render task
   if (renderTask.value) {
     renderTask.value.cancel()
     renderTask.value = null
@@ -72,30 +65,34 @@ async function renderPage() {
     const canvas = canvasRef.value
     const ctx = canvas.getContext('2d')
 
-    // Final scale = user zoom * base fit scale
     const finalScale = userScale.value * baseFitScale.value
     const scaledViewport = page.getViewport({ scale: finalScale })
 
-    // Ensure valid dimensions
     if (scaledViewport.width < 1 || scaledViewport.height < 1 || isNaN(scaledViewport.width)) {
       console.warn('Invalid viewport dimensions', scaledViewport)
       return
     }
 
-    canvas.width = Math.floor(scaledViewport.width)
-    canvas.height = Math.floor(scaledViewport.height)
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.floor(scaledViewport.width * dpr)
+    canvas.height = Math.floor(scaledViewport.height * dpr)
+    canvas.style.width = Math.floor(scaledViewport.width) + 'px'
+    canvas.style.height = Math.floor(scaledViewport.height) + 'px'
 
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
     const renderContext = {
       canvasContext: ctx,
-      viewport: scaledViewport
+      viewport: scaledViewport,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
     }
 
     renderTask.value = page.render(renderContext)
     await renderTask.value.promise
     renderTask.value = null
+    // Reset scroll to top on new page
+    if (contentRef.value) contentRef.value.scrollTop = 0
   } catch (e) {
     if (e.name !== 'RenderingCancelledException') {
       console.error('PDF rendering error:', e)
@@ -104,7 +101,7 @@ async function renderPage() {
   }
 }
 
-// Navigation
+// Page navigation
 function prevPage() {
   if (currentPage.value > 1) {
     currentPage.value--
@@ -127,6 +124,28 @@ function goToPage(e) {
   }
 }
 
+// Scroll up/down buttons
+function scrollUp() {
+  if (!contentRef.value) return
+  contentRef.value.scrollBy({ top: -contentRef.value.clientHeight * 0.8, behavior: 'smooth' })
+}
+
+function scrollDown() {
+  if (!contentRef.value) return
+  contentRef.value.scrollBy({ top: contentRef.value.clientHeight * 0.8, behavior: 'smooth' })
+}
+
+function scrollLeft() {
+  if (!contentRef.value) return
+  contentRef.value.scrollBy({ left: -contentRef.value.clientWidth * 0.8, behavior: 'smooth' })
+}
+
+function scrollRight() {
+  if (!contentRef.value) return
+  contentRef.value.scrollBy({ left: contentRef.value.clientWidth * 0.8, behavior: 'smooth' })
+}
+
+// Zoom
 function zoomIn() {
   userScale.value = Math.min(userScale.value + 0.2, 3)
   renderPage()
@@ -146,9 +165,7 @@ function resetZoom() {
 let resizeTimeout = null
 function handleResize() {
   clearTimeout(resizeTimeout)
-  resizeTimeout = setTimeout(() => {
-    renderPage()
-  }, 150)
+  resizeTimeout = setTimeout(() => { renderPage() }, 150)
 }
 
 onMounted(() => {
@@ -159,27 +176,19 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   clearTimeout(resizeTimeout)
-  if (renderTask.value) {
-    renderTask.value.cancel()
-  }
+  if (renderTask.value) renderTask.value.cancel()
 })
 
-watch(() => props.pdfUrl, () => {
-  loadPDF()
-})
+watch(() => props.pdfUrl, () => { loadPDF() })
 </script>
 
 <template>
   <div class="pdf-viewer">
     <!-- Toolbar -->
     <div class="pdf-toolbar">
+      <!-- Page navigation -->
       <div class="pdf-toolbar-group">
-        <button
-          class="pdf-btn"
-          :disabled="currentPage <= 1"
-          @click="prevPage"
-          title="上一页"
-        >
+        <button class="pdf-btn" :disabled="currentPage <= 1" @click="prevPage" title="上一页">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 4l-6 6 6 6"/>
           </svg>
@@ -195,18 +204,38 @@ watch(() => props.pdfUrl, () => {
           />
           <span class="pdf-page-total">/ {{ totalPages }}</span>
         </span>
-        <button
-          class="pdf-btn"
-          :disabled="currentPage >= totalPages"
-          @click="nextPage"
-          title="下一页"
-        >
+        <button class="pdf-btn" :disabled="currentPage >= totalPages" @click="nextPage" title="下一页">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M8 4l6 6-6 6"/>
           </svg>
         </button>
       </div>
 
+      <!-- Scroll up/down/left/right -->
+      <div class="pdf-toolbar-group">
+        <button class="pdf-btn" @click="scrollLeft" title="向左滚动">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M13 4l-6 6 6 6"/>
+          </svg>
+        </button>
+        <button class="pdf-btn" @click="scrollUp" title="向上滚动">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 13l6-6 6 6"/>
+          </svg>
+        </button>
+        <button class="pdf-btn" @click="scrollDown" title="向下滚动">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 7l6 6 6-6"/>
+          </svg>
+        </button>
+        <button class="pdf-btn" @click="scrollRight" title="向右滚动">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M7 4l6 6-6 6"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Zoom -->
       <div class="pdf-toolbar-group">
         <button class="pdf-btn" @click="zoomOut" title="缩小">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -224,14 +253,10 @@ watch(() => props.pdfUrl, () => {
           </svg>
         </button>
       </div>
-
-      <div class="pdf-toolbar-group right">
-        <!-- Download button removed - use CloudFiles instead -->
-      </div>
     </div>
 
     <!-- Content -->
-    <div class="pdf-content">
+    <div class="pdf-content" ref="contentRef">
       <div v-show="loading" class="pdf-loading">
         <div class="pdf-spinner"></div>
         <span>加载PDF中...</span>
@@ -265,16 +290,13 @@ watch(() => props.pdfUrl, () => {
   background: rgba(0, 0, 0, 0.3);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .pdf-toolbar-group {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.pdf-toolbar-group.right {
-  margin-left: auto;
 }
 
 .pdf-btn {
@@ -345,14 +367,13 @@ watch(() => props.pdfUrl, () => {
 .pdf-content {
   flex: 1;
   overflow: auto;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
   padding: 20px;
 }
 
 .pdf-canvas-wrapper {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  width: fit-content;
+  margin: 0 auto;
 }
 
 .pdf-canvas {

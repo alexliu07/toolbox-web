@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, inject } from 'vue'
+import { ref, computed, onMounted, onErrorCaptured, inject } from 'vue'
 
 // ── state ──
 const openPDFViewer = inject('openPDFViewer')
@@ -8,7 +8,14 @@ const files = ref([])
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
-const viewMode = ref(localStorage.getItem('cloudfiles-view') || 'list')
+function safeLocalStorage(key, fallback) {
+  try { return localStorage.getItem(key) || fallback } catch { return fallback }
+}
+function safeLocalStorageSet(key, val) {
+  try { localStorage.setItem(key, val) } catch {}
+}
+
+const viewMode = ref(safeLocalStorage('cloudfiles-view', 'list'))
 
 // preview (for unsupported file types)
 const preview = ref(null)
@@ -32,7 +39,7 @@ const filtered = computed(() => {
 // ── helpers ──
 function setView(mode) {
   viewMode.value = mode
-  localStorage.setItem('cloudfiles-view', mode)
+  safeLocalStorageSet('cloudfiles-view', mode)
 }
 
 function formatSize(bytes) {
@@ -77,7 +84,9 @@ async function fetchFiles() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     files.value = await res.json()
   } catch (e) {
-    error.value = '加载文件列表失败：' + e.message
+    const msg = e?.message || e?.name || JSON.stringify(e) || '未知错误'
+    error.value = '加载文件列表失败：' + msg + ' | ' + (e?.stack?.split('\n')[0] || '')
+    console.error('fetchFiles error:', e, 'type:', typeof e, 'keys:', Object.keys(e || {}))
   } finally {
     loading.value = false
   }
@@ -189,7 +198,22 @@ function onFileInputChange(e) {
   e.target.value = ''
 }
 
-onMounted(fetchFiles)
+onMounted(() => {
+  fetchFiles().catch(e => {
+    const msg = e?.message || e?.name || JSON.stringify(e) || '未知错误'
+    error.value = '加载文件列表失败：' + msg
+    loading.value = false
+    console.error('onMounted fetchFiles catch:', e)
+  })
+})
+
+onErrorCaptured((e) => {
+  const msg = e?.message || e?.name || JSON.stringify(e) || '未知错误'
+  error.value = '组件错误：' + msg
+  loading.value = false
+  console.error('onErrorCaptured:', e)
+  return false
+})
 </script>
 
 <template>
