@@ -24,7 +24,8 @@ const dateStr = computed(() => {
 })
 
 // ── tools registry ──
-const tools = [
+const toolConfig = ref({})
+const allTools = [
   {
     id: 'dino',
     name: '小恐龙',
@@ -81,6 +82,24 @@ const tools = [
     height: 600,
   },
 ]
+
+// 根据配置过滤启用的工具
+const tools = computed(() => {
+  const cfg = toolConfig.value
+  return allTools.filter(tool => cfg[tool.id]?.enabled !== false)
+})
+
+// 加载外部配置
+async function loadConfig() {
+  try {
+    const res = await fetch('/config.json')
+    if (res.ok) {
+      toolConfig.value = await res.json()
+    }
+  } catch (e) {
+    console.warn('Failed to load config.json, using defaults')
+  }
+}
 
 // ── open windows ──
 const openWindows = ref([])      // array of { id, toolId, tool, zIndex }
@@ -159,6 +178,7 @@ provide('openFileViewer', openFileViewer)
 
 onMounted(() => {
   timer = setInterval(() => { now.value = new Date() }, 1000)
+  loadConfig()
 })
 onUnmounted(() => clearInterval(timer))
 </script>
