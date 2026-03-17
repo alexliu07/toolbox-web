@@ -1,0 +1,17 @@
+{
+  "dino": {
+    "enabled": true
+  },
+  "calculator": {
+    "enabled": true
+  },
+  "desmos": {
+    "enabled": true
+  },
+  "drawing": {
+    "enabled": true
+  },
+  "cloudfiles": {
+    "enabled": true
+  }
+}

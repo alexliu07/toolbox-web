@@ -1,0 +1,51 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 构建前端 ────────────────────────────────────────────────
+      - name: Build frontend
+        run: npm run build
+        # 输出到 dist/
+
+      # ── 打包后端（含前端产物）──────────────────────────────────
+      - name: Assemble release package
+        run: |
+          mkdir -p release
+          # 前端产物
+          cp -r dist      release/dist
+          # 后端源码
+          cp -r server    release/server
+          # 运行时配置
+          cp public/config.json release/config.json
+          # 依赖清单（部署时 npm ci --omit=dev）
+          cp package.json      release/package.json
+          cp package-lock.json release/package-lock.json
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbox-${{ github.ref_name }}-${{ github.sha }}
+          path: release/
+          retention-days: 30
