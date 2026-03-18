@@ -10,6 +10,7 @@ const error = ref('')
 const search = ref('')
 const sharedFolders = ref([])
 const currentFolder = ref(null)  // null = default storage, or folder id
+const currentPath = ref('')  // current subpath within shared folder
 
 function safeLocalStorage(key, fallback) {
   try { return localStorage.getItem(key) || fallback } catch { return fallback }
@@ -57,7 +58,8 @@ function formatDate(iso) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-function fileTypeIcon(mime) {
+function fileTypeIcon(mime, type) {
+  if (type === 'folder' || mime === 'folder') return '📁'
   if (!mime) return '📄'
   if (mime.startsWith('image/')) return '🖼'
   if (mime.startsWith('video/')) return '🎬'
@@ -93,9 +95,15 @@ async function fetchFiles() {
   loading.value = true
   error.value = ''
   try {
-    const url = currentFolder.value
-      ? `/api/shared-folders/${currentFolder.value}/files`
-      : '/api/files'
+    let url
+    if (currentFolder.value) {
+      url = `/api/shared-folders/${currentFolder.value}/files`
+      if (currentPath.value) {
+        url += `?path=${encodeURIComponent(currentPath.value)}`
+      }
+    } else {
+      url = '/api/files'
+    }
     const res = await fetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     files.value = await res.json()
@@ -110,8 +118,33 @@ async function fetchFiles() {
 
 function selectFolder(folderId) {
   currentFolder.value = folderId
+  currentPath.value = ''
   fetchFiles()
 }
+
+function navigateToSubfolder(folderName) {
+  if (currentPath.value) {
+    currentPath.value = currentPath.value + '/' + folderName
+  } else {
+    currentPath.value = folderName
+  }
+  fetchFiles()
+}
+
+function navigateToBreadcrumb(index) {
+  if (index === -1) {
+    currentPath.value = ''
+  } else {
+    const parts = currentPath.value.split('/')
+    currentPath.value = parts.slice(0, index + 1).join('/')
+  }
+  fetchFiles()
+}
+
+const breadcrumbs = computed(() => {
+  if (!currentPath.value) return []
+  return currentPath.value.split('/')
+})
 
 async function uploadFiles(fileList) {
   const arr = Array.from(fileList)
@@ -152,9 +185,13 @@ async function deleteFile(name) {
 
 function downloadFile(file) {
   const link = document.createElement('a')
-  const url = currentFolder.value
-    ? `/api/shared-folders/${currentFolder.value}/raw/${encodeURIComponent(file.name)}`
-    : `/api/files/raw/${encodeURIComponent(file.name)}`
+  let url
+  if (currentFolder.value) {
+    const filePath = currentPath.value ? `${currentPath.value}/${file.name}` : file.name
+    url = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
+  } else {
+    url = `/api/files/raw/${encodeURIComponent(file.name)}`
+  }
   link.href = url
   link.download = file.name
   link.click()
@@ -184,9 +221,19 @@ async function confirmRename(oldName) {
 }
 
 async function openPreview(file) {
-  const fileUrl = currentFolder.value
-    ? `/api/shared-folders/${currentFolder.value}/raw/${encodeURIComponent(file.name)}`
-    : `/api/files/raw/${encodeURIComponent(file.name)}`
+  // If it's a folder, navigate into it
+  if (file.type === 'folder') {
+    navigateToSubfolder(file.name)
+    return
+  }
+
+  let fileUrl
+  if (currentFolder.value) {
+    const filePath = currentPath.value ? `${currentPath.value}/${file.name}` : file.name
+    fileUrl = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
+  } else {
+    fileUrl = `/api/files/raw/${encodeURIComponent(file.name)}`
+  }
 
   // Open PDF in PDF viewer
   if (isPDF(file.mime)) {
@@ -205,7 +252,7 @@ async function openPreview(file) {
   }
 
   // For other file types, show preview modal
-  preview.value = { file }
+  preview.value = { file, fileUrl }
 }
 
 function closePreview() { preview.value = null }
@@ -286,6 +333,16 @@ onErrorCaptured((e) => {
       <button class="cf-view-btn" :class="{ active: viewMode === 'grid' }" @click="setView('grid')" title="网格视图">⊞</button>
     </div>
 
+    <!-- breadcrumb navigation -->
+    <div class="cf-breadcrumb" v-if="currentFolder && (currentPath || breadcrumbs.length)">
+      <span class="cf-breadcrumb-item" @click="navigateToBreadcrumb(-1)">根目录</span>
+      <span class="cf-breadcrumb-sep" v-if="breadcrumbs.length">/</span>
+      <template v-for="(crumb, index) in breadcrumbs" :key="index">
+        <span class="cf-breadcrumb-item" @click="navigateToBreadcrumb(index)">{{ crumb }}</span>
+        <span class="cf-breadcrumb-sep" v-if="index < breadcrumbs.length - 1">/</span>
+      </template>
+    </div>
+
     <!-- upload progress -->
     <div class="cf-upload-bar" v-if="uploadProgress.length">
       <div v-for="item in uploadProgress" :key="item.name" class="cf-upload-item">
@@ -322,9 +379,9 @@ onErrorCaptured((e) => {
         :key="file.name"
         class="cf-list-row"
       >
-        <span class="col-icon">{{ fileTypeIcon(file.mime) }}</span>
+        <span class="col-icon">{{ fileTypeIcon(file.mime, file.type) }}</span>
         <span class="col-name">
-          <template v-if="renaming === file.name">
+          <template v-if="renaming === file.name && file.type !== 'folder'">
             <input
               class="cf-rename-input"
               v-model="renameVal"
@@ -334,14 +391,14 @@ onErrorCaptured((e) => {
               autofocus
             />
           </template>
-          <span v-else class="cf-filename" @click="openPreview(file)">{{ file.name }}</span>
+          <span v-else class="cf-filename" @click="openPreview(file)" :class="{ 'cf-folder': file.type === 'folder' }">{{ file.name }}</span>
         </span>
-        <span class="col-size">{{ formatSize(file.size) }}</span>
+        <span class="col-size">{{ file.type === 'folder' ? '-' : formatSize(file.size) }}</span>
         <span class="col-time">{{ formatDate(file.mtime) }}</span>
         <span class="col-ops">
-          <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
-          <button class="cf-op-btn" @click="startRename(file.name)" title="重命名" :disabled="currentFolder !== null">✏</button>
-          <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除" :disabled="currentFolder !== null">🗑</button>
+          <button v-if="file.type !== 'folder'" class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
+          <button v-if="file.type !== 'folder'" class="cf-op-btn" @click="startRename(file.name)" title="重命名" :disabled="currentFolder !== null">✏</button>
+          <button v-if="file.type !== 'folder'" class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除" :disabled="currentFolder !== null">🗑</button>
         </span>
       </div>
     </div>
@@ -354,11 +411,11 @@ onErrorCaptured((e) => {
         class="cf-grid-item"
       >
         <div class="cf-grid-thumb" @click="openPreview(file)">
-          <img v-if="isImage(file.mime)" :src="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${encodeURIComponent(file.name)}` : `/api/files/raw/${encodeURIComponent(file.name)}`" :alt="file.name" />
-          <span v-else class="cf-grid-type-icon">{{ fileTypeIcon(file.mime) }}</span>
+          <img v-if="file.type !== 'folder' && isImage(file.mime)" :src="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${currentPath ? currentPath + '/' : ''}${file.name}` : `/api/files/raw/${encodeURIComponent(file.name)}`" :alt="file.name" />
+          <span v-else class="cf-grid-type-icon">{{ fileTypeIcon(file.mime, file.type) }}</span>
         </div>
         <div class="cf-grid-info">
-          <template v-if="renaming === file.name">
+          <template v-if="renaming === file.name && file.type !== 'folder'">
             <input
               class="cf-rename-input"
               v-model="renameVal"
@@ -368,8 +425,8 @@ onErrorCaptured((e) => {
               autofocus
             />
           </template>
-          <span v-else class="cf-grid-name" @click="openPreview(file)" :title="file.name">{{ file.name }}</span>
-          <div class="cf-grid-ops">
+          <span v-else class="cf-grid-name" @click="openPreview(file)" :title="file.name" :class="{ 'cf-folder': file.type === 'folder' }">{{ file.name }}</span>
+          <div class="cf-grid-ops" v-if="file.type !== 'folder'">
             <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
             <button class="cf-op-btn" @click="startRename(file.name)" title="重命名" :disabled="currentFolder !== null">✏</button>
             <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除" :disabled="currentFolder !== null">🗑</button>
@@ -392,9 +449,9 @@ onErrorCaptured((e) => {
         </div>
         <div class="cf-modal-body">
           <div class="cf-preview-unsupported">
-            <div>{{ fileTypeIcon(preview.file.mime) }}</div>
+            <div>{{ fileTypeIcon(preview.file.mime, preview.file.type) }}</div>
             <div>此文件类型不支持预览</div>
-            <a :href="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${encodeURIComponent(preview.file.name)}` : `/api/files/raw/${encodeURIComponent(preview.file.name)}`" target="_blank" class="cf-btn primary cf-dl-link">下载文件</a>
+            <a :href="preview.fileUrl" target="_blank" class="cf-btn primary cf-dl-link">下载文件</a>
           </div>
         </div>
       </div>
@@ -547,6 +604,43 @@ onErrorCaptured((e) => {
 .cf-view-btn:hover { color: #e6edf3; }
 .cf-view-btn.active { background: #1a8fe3; border-color: #1a8fe3; color: #fff; }
 
+/* ── breadcrumb ── */
+.cf-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  font-size: 13px;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.cf-breadcrumb-item {
+  color: #79c0ff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cf-breadcrumb-item:hover {
+  text-decoration: underline;
+}
+
+.cf-breadcrumb-item:last-child {
+  color: #e6edf3;
+  font-weight: 500;
+  cursor: default;
+}
+
+.cf-breadcrumb-item:last-child:hover {
+  text-decoration: none;
+}
+
+.cf-breadcrumb-sep {
+  color: #8b949e;
+}
+
 /* ── upload progress ── */
 .cf-upload-bar {
   display: flex;
@@ -651,6 +745,11 @@ onErrorCaptured((e) => {
 
 .cf-filename:hover { text-decoration: underline; }
 
+.cf-filename.cf-folder {
+  color: #e6edf3;
+  font-weight: 500;
+}
+
 /* ── grid view ── */
 .cf-grid {
   flex: 1;
@@ -713,6 +812,11 @@ onErrorCaptured((e) => {
 }
 
 .cf-grid-name:hover { text-decoration: underline; }
+
+.cf-grid-name.cf-folder {
+  color: #e6edf3;
+  font-weight: 500;
+}
 
 .cf-grid-ops {
   display: flex;

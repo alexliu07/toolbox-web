@@ -34,56 +34,84 @@ router.get('/', (_req, res) => {
   }
 })
 
-// GET /api/shared-folders/:folderId/files — list files in a shared folder
+// Security: prevent path traversal
+function isPathSafe(basePath, requestedPath) {
+  const resolved = path.resolve(basePath, requestedPath)
+  return resolved.startsWith(basePath)
+}
+
+// GET /api/shared-folders/:folderId/files — list files and folders in a shared folder
 router.get('/:folderId/files', (req, res) => {
   try {
     const config = loadConfig()
     const folder = config.folders.find(f => f.id === req.params.folderId)
     if (!folder) return res.status(404).json({ error: 'Folder not found' })
 
-    const folderPath = resolveFolderPath(folder.path)
-    if (!fs.existsSync(folderPath)) {
+    const basePath = resolveFolderPath(folder.path)
+    if (!fs.existsSync(basePath)) {
       return res.status(404).json({ error: 'Folder path does not exist' })
     }
 
-    const entries = fs.readdirSync(folderPath)
-    const files = entries
-      .filter(name => {
-        const fullPath = path.join(folderPath, name)
-        return fs.statSync(fullPath).isFile()
-      })
+    // Get subpath from query parameter
+    const subPath = req.query.path || ''
+    const targetPath = path.join(basePath, subPath)
+
+    // Security check: prevent path traversal
+    if (!isPathSafe(basePath, subPath)) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      return res.status(404).json({ error: 'Path does not exist' })
+    }
+
+    const entries = fs.readdirSync(targetPath)
+    const items = entries
       .map(name => {
-        const fullPath = path.join(folderPath, name)
+        const fullPath = path.join(targetPath, name)
         const stat = fs.statSync(fullPath)
+        const isDirectory = stat.isDirectory()
         return {
           name,
-          size: stat.size,
+          type: isDirectory ? 'folder' : 'file',
+          size: isDirectory ? 0 : stat.size,
           mtime: stat.mtime.toISOString(),
-          mime: mime.lookup(name) || 'application/octet-stream',
+          mime: isDirectory ? 'folder' : (mime.lookup(name) || 'application/octet-stream'),
         }
       })
-      .sort((a, b) => new Date(b.mtime) - new Date(a.mtime))
-    res.json(files)
+      .sort((a, b) => {
+        // Folders first, then by mtime
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+        return new Date(b.mtime) - new Date(a.mtime)
+      })
+    res.json(items)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-// GET /api/shared-folders/:folderId/raw/:name — serve raw file from shared folder
-router.get('/:folderId/raw/:name', (req, res) => {
+// GET /api/shared-folders/:folderId/raw/* — serve raw file from shared folder (supports subpaths)
+router.get('/:folderId/raw/*', (req, res) => {
   try {
     const config = loadConfig()
     const folder = config.folders.find(f => f.id === req.params.folderId)
     if (!folder) return res.status(404).json({ error: 'Folder not found' })
 
-    const folderPath = resolveFolderPath(folder.path)
-    const filePath = path.join(folderPath, path.basename(req.params.name))
+    const basePath = resolveFolderPath(folder.path)
+    // Get the file path after /raw/
+    const filePath = req.params[0] || ''
+    const fullPath = path.join(basePath, filePath)
 
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' })
+    // Security check: prevent path traversal
+    if (!isPathSafe(basePath, filePath)) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
 
-    const mimeType = mime.lookup(filePath) || 'application/octet-stream'
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' })
+
+    const mimeType = mime.lookup(fullPath) || 'application/octet-stream'
     res.setHeader('Content-Type', mimeType)
-    res.sendFile(filePath)
+    res.sendFile(fullPath)
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
