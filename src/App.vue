@@ -154,7 +154,7 @@ function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
 }
 
 // Open file in new window (image, text, video, audio)
-function openFileViewer(fileUrl, fileName, mimeType) {
+function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
   // Determine icon based on mime type
   let icon = '📄'
   if (mimeType?.startsWith('image/')) icon = '🖼'
@@ -168,13 +168,35 @@ function openFileViewer(fileUrl, fileName, mimeType) {
     fileName: fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName,
     mimeType,
     icon,
+    fileList,
+    currentIndex,
     zIndex: ++zCounter
   })
+}
+
+// Navigate to different file in file viewer
+function navigateFileViewer(winId, newIndex) {
+  const win = fileWindows.value.find(w => w.id === winId)
+  if (!win || !win.fileList || newIndex < 0 || newIndex >= win.fileList.length) return
+
+  const newFile = win.fileList[newIndex]
+  win.currentIndex = newIndex
+  win.fileUrl = newFile.url
+  win.fileName = newFile.name.length > 40 ? newFile.name.slice(0, 37) + '...' : newFile.name
+  win.mimeType = newFile.mime
+
+  // Update icon
+  if (newFile.mime?.startsWith('image/')) win.icon = '🖼'
+  else if (newFile.mime?.startsWith('video/')) win.icon = '🎬'
+  else if (newFile.mime?.startsWith('audio/')) win.icon = '🎵'
+  else if (newFile.mime?.startsWith('text/')) win.icon = '📝'
+  else win.icon = '📄'
 }
 
 // Provide functions to child components
 provide('openPDFViewer', openPDFViewer)
 provide('openFileViewer', openFileViewer)
+provide('navigateFileViewer', navigateFileViewer)
 
 onMounted(() => {
   timer = setInterval(() => { now.value = new Date() }, 1000)
@@ -271,6 +293,9 @@ onUnmounted(() => clearInterval(timer))
         :fileUrl="win.fileUrl"
         :fileName="win.fileName"
         :mimeType="win.mimeType"
+        :fileList="win.fileList || []"
+        :currentIndex="win.currentIndex !== undefined ? win.currentIndex : -1"
+        @navigate="(newIndex) => navigateFileViewer(win.id, newIndex)"
       />
     </AppWindow>
   </div>

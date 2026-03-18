@@ -246,7 +246,22 @@ async function openPreview(file) {
   // Open image, text, video, audio in file viewer
   if (isImage(file.mime) || isText(file.mime) || isVideo(file.mime) || isAudio(file.mime)) {
     if (openFileViewer) {
-      openFileViewer(fileUrl, file.name, file.mime)
+      // Build file list for navigation (only include previewable files)
+      const previewableFiles = files.value
+        .filter(f => f.type !== 'folder' && (isImage(f.mime) || isText(f.mime) || isVideo(f.mime) || isAudio(f.mime)))
+        .map(f => {
+          let url
+          if (currentFolder.value) {
+            const filePath = currentPath.value ? `${currentPath.value}/${f.name}` : f.name
+            url = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
+          } else {
+            url = `/api/files/raw/${encodeURIComponent(f.name)}`
+          }
+          return { name: f.name, url, mime: f.mime }
+        })
+
+      const currentIndex = previewableFiles.findIndex(f => f.name === file.name)
+      openFileViewer(fileUrl, file.name, file.mime, previewableFiles, currentIndex)
     }
     return
   }
