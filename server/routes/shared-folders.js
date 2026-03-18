@@ -67,6 +67,13 @@ router.get('/:folderId/files', (req, res) => {
 
     const entries = fs.readdirSync(targetPath)
     const items = entries
+      .filter(name => {
+        // Filter out system files
+        const lowerName = name.toLowerCase()
+        return lowerName !== 'desktop.ini' &&
+               lowerName !== '.ds_store' &&
+               lowerName !== 'thumbs.db'
+      })
       .map(name => {
         const fullPath = path.join(targetPath, name)
         const stat = fs.statSync(fullPath)

@@ -35,7 +35,14 @@ router.get('/', (_req, res) => {
   try {
     const entries = fs.readdirSync(STORAGE_DIR)
     const files = entries
-      .filter(name => name !== '.gitkeep')
+      .filter(name => {
+        // Filter out system files
+        const lowerName = name.toLowerCase()
+        return name !== '.gitkeep' &&
+               lowerName !== 'desktop.ini' &&
+               lowerName !== '.ds_store' &&
+               lowerName !== 'thumbs.db'
+      })
       .map(name => {
         const fullPath = path.join(STORAGE_DIR, name)
         const stat = fs.statSync(fullPath)
