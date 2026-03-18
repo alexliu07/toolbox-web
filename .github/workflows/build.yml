@@ -37,8 +37,6 @@ jobs:
           cp -r dist      release/dist
           # 后端源码
           cp -r server    release/server
-          # 运行时配置
-          cp public/config.json release/config.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
