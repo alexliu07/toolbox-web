@@ -203,28 +203,29 @@ onUnmounted(() => {
         <span class="fv-type">{{ mimeType }}</span>
       </div>
 
-      <!-- Image controls (only show for images) -->
-      <div v-if="isImage(mimeType)" class="fv-controls">
+      <!-- Controls (show for previewable files) -->
+      <div v-if="isImage(mimeType) || isVideo(mimeType) || isAudio(mimeType) || isText(mimeType)" class="fv-controls">
+        <!-- Zoom & Pan (only for images) -->
+        <template v-if="isImage(mimeType)">
+          <div class="fv-control-group">
+            <button class="fv-btn" @click="zoomOut" title="缩小 (-)">−</button>
+            <span class="fv-zoom-level">{{ Math.round(zoom * 100) }}%</span>
+            <button class="fv-btn" @click="zoomIn" title="放大 (+)">+</button>
+            <button class="fv-btn" @click="resetZoom" title="重置 (0)">⊙</button>
+          </div>
+
+          <div class="fv-control-group">
+            <button class="fv-btn" @click="panUp" title="上移 (↑)">↑</button>
+            <button class="fv-btn" @click="panDown" title="下移 (↓)">↓</button>
+            <button class="fv-btn" @click="panLeft" title="左移 (←)">←</button>
+            <button class="fv-btn" @click="panRight" title="右移 (→)">→</button>
+          </div>
+        </template>
+
         <!-- Navigation -->
         <div class="fv-control-group">
-          <button class="fv-btn" @click="goPrev" :disabled="!canGoPrev" title="上一张 (Shift+←)">◀</button>
-          <button class="fv-btn" @click="goNext" :disabled="!canGoNext" title="下一张 (Shift+→)">▶</button>
-        </div>
-
-        <!-- Zoom -->
-        <div class="fv-control-group">
-          <button class="fv-btn" @click="zoomOut" title="缩小 (-)">−</button>
-          <span class="fv-zoom-level">{{ Math.round(zoom * 100) }}%</span>
-          <button class="fv-btn" @click="zoomIn" title="放大 (+)">+</button>
-          <button class="fv-btn" @click="resetZoom" title="重置 (0)">⊙</button>
-        </div>
-
-        <!-- Pan -->
-        <div class="fv-control-group">
-          <button class="fv-btn" @click="panUp" title="上移 (↑)">↑</button>
-          <button class="fv-btn" @click="panDown" title="下移 (↓)">↓</button>
-          <button class="fv-btn" @click="panLeft" title="左移 (←)">←</button>
-          <button class="fv-btn" @click="panRight" title="右移 (→)">→</button>
+          <button class="fv-btn" @click="goPrev" :disabled="!canGoPrev" title="上一个 (Shift+←)">◀</button>
+          <button class="fv-btn" @click="goNext" :disabled="!canGoNext" title="下一个 (Shift+→)">▶</button>
         </div>
       </div>
     </div>
