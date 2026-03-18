@@ -8,6 +8,9 @@ const files = ref([])
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
+const sharedFolders = ref([])
+const currentFolder = ref(null)  // null = default storage, or folder id
+
 function safeLocalStorage(key, fallback) {
   try { return localStorage.getItem(key) || fallback } catch { return fallback }
 }
@@ -76,11 +79,24 @@ function isVideo(mime) { return mime && mime.startsWith('video/') }
 function isAudio(mime) { return mime && mime.startsWith('audio/') }
 
 // ── API calls ──
+async function fetchSharedFolders() {
+  try {
+    const res = await fetch('/api/shared-folders')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    sharedFolders.value = await res.json()
+  } catch (e) {
+    console.error('fetchSharedFolders error:', e)
+  }
+}
+
 async function fetchFiles() {
   loading.value = true
   error.value = ''
   try {
-    const res = await fetch('/api/files')
+    const url = currentFolder.value
+      ? `/api/shared-folders/${currentFolder.value}/files`
+      : '/api/files'
+    const res = await fetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     files.value = await res.json()
   } catch (e) {
@@ -90,6 +106,11 @@ async function fetchFiles() {
   } finally {
     loading.value = false
   }
+}
+
+function selectFolder(folderId) {
+  currentFolder.value = folderId
+  fetchFiles()
 }
 
 async function uploadFiles(fileList) {
@@ -131,7 +152,10 @@ async function deleteFile(name) {
 
 function downloadFile(file) {
   const link = document.createElement('a')
-  link.href = `/api/files/raw/${encodeURIComponent(file.name)}`
+  const url = currentFolder.value
+    ? `/api/shared-folders/${currentFolder.value}/raw/${encodeURIComponent(file.name)}`
+    : `/api/files/raw/${encodeURIComponent(file.name)}`
+  link.href = url
   link.download = file.name
   link.click()
 }
@@ -160,7 +184,9 @@ async function confirmRename(oldName) {
 }
 
 async function openPreview(file) {
-  const fileUrl = `/api/files/raw/${encodeURIComponent(file.name)}`
+  const fileUrl = currentFolder.value
+    ? `/api/shared-folders/${currentFolder.value}/raw/${encodeURIComponent(file.name)}`
+    : `/api/files/raw/${encodeURIComponent(file.name)}`
 
   // Open PDF in PDF viewer
   if (isPDF(file.mime)) {
@@ -199,6 +225,7 @@ function onFileInputChange(e) {
 }
 
 onMounted(() => {
+  fetchSharedFolders()
   fetchFiles().catch(e => {
     const msg = e?.message || e?.name || JSON.stringify(e) || '未知错误'
     error.value = '加载文件列表失败：' + msg
@@ -224,9 +251,34 @@ onErrorCaptured((e) => {
     @drop="onDrop"
     :class="{ dragging: isDragging }"
   >
+    <!-- sidebar -->
+    <div class="cf-sidebar">
+      <div class="cf-sidebar-title">文件夹</div>
+      <div
+        class="cf-sidebar-item"
+        :class="{ active: currentFolder === null }"
+        @click="selectFolder(null)"
+      >
+        <span class="cf-sidebar-icon">☁</span>
+        <span class="cf-sidebar-name">云存储</span>
+      </div>
+      <div
+        v-for="folder in sharedFolders"
+        :key="folder.id"
+        class="cf-sidebar-item"
+        :class="{ active: currentFolder === folder.id }"
+        @click="selectFolder(folder.id)"
+      >
+        <span class="cf-sidebar-icon">{{ folder.icon || '📁' }}</span>
+        <span class="cf-sidebar-name">{{ folder.name }}</span>
+      </div>
+    </div>
+
+    <!-- main content -->
+    <div class="cf-main">
     <!-- toolbar -->
     <div class="cf-toolbar">
-      <button class="cf-btn primary" @click="fileInput.click()">+ 上传文件</button>
+      <button class="cf-btn primary" @click="fileInput.click()" :disabled="currentFolder !== null">+ 上传文件</button>
       <input ref="fileInput" type="file" multiple style="display:none" @change="onFileInputChange" />
       <input class="cf-search" v-model="search" placeholder="搜索文件名…" />
       <div class="cf-spacer" />
@@ -288,8 +340,8 @@ onErrorCaptured((e) => {
         <span class="col-time">{{ formatDate(file.mtime) }}</span>
         <span class="col-ops">
           <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
-          <button class="cf-op-btn" @click="startRename(file.name)" title="重命名">✏</button>
-          <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除">🗑</button>
+          <button class="cf-op-btn" @click="startRename(file.name)" title="重命名" :disabled="currentFolder !== null">✏</button>
+          <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除" :disabled="currentFolder !== null">🗑</button>
         </span>
       </div>
     </div>
@@ -302,7 +354,7 @@ onErrorCaptured((e) => {
         class="cf-grid-item"
       >
         <div class="cf-grid-thumb" @click="openPreview(file)">
-          <img v-if="isImage(file.mime)" :src="`/api/files/raw/${encodeURIComponent(file.name)}`" :alt="file.name" />
+          <img v-if="isImage(file.mime)" :src="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${encodeURIComponent(file.name)}` : `/api/files/raw/${encodeURIComponent(file.name)}`" :alt="file.name" />
           <span v-else class="cf-grid-type-icon">{{ fileTypeIcon(file.mime) }}</span>
         </div>
         <div class="cf-grid-info">
@@ -319,8 +371,8 @@ onErrorCaptured((e) => {
           <span v-else class="cf-grid-name" @click="openPreview(file)" :title="file.name">{{ file.name }}</span>
           <div class="cf-grid-ops">
             <button class="cf-op-btn" @click="downloadFile(file)" title="下载">⬇</button>
-            <button class="cf-op-btn" @click="startRename(file.name)" title="重命名">✏</button>
-            <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除">🗑</button>
+            <button class="cf-op-btn" @click="startRename(file.name)" title="重命名" :disabled="currentFolder !== null">✏</button>
+            <button class="cf-op-btn danger" @click="deleteFile(file.name)" title="删除" :disabled="currentFolder !== null">🗑</button>
           </div>
         </div>
       </div>
@@ -342,10 +394,11 @@ onErrorCaptured((e) => {
           <div class="cf-preview-unsupported">
             <div>{{ fileTypeIcon(preview.file.mime) }}</div>
             <div>此文件类型不支持预览</div>
-            <a :href="`/api/files/raw/${encodeURIComponent(preview.file.name)}`" target="_blank" class="cf-btn primary cf-dl-link">下载文件</a>
+            <a :href="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${encodeURIComponent(preview.file.name)}` : `/api/files/raw/${encodeURIComponent(preview.file.name)}`" target="_blank" class="cf-btn primary cf-dl-link">下载文件</a>
           </div>
         </div>
       </div>
+    </div>
     </div>
   </div>
 </template>
@@ -355,11 +408,68 @@ onErrorCaptured((e) => {
 .cf {
   position: relative;
   display: flex;
-  flex-direction: column;
   height: 100%;
   background: #0d1117;
   color: #e6edf3;
   font-size: 13px;
+  overflow: hidden;
+}
+
+.cf-sidebar {
+  width: 180px;
+  background: #161b22;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.cf-sidebar-title {
+  padding: 12px 14px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.cf-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-left: 3px solid transparent;
+}
+
+.cf-sidebar-item:hover {
+  background: #0d1117;
+}
+
+.cf-sidebar-item.active {
+  background: #0d1117;
+  border-left-color: #1a8fe3;
+}
+
+.cf-sidebar-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.cf-sidebar-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.cf-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -404,6 +514,8 @@ onErrorCaptured((e) => {
 }
 
 .cf-btn.primary:hover { background: #1479c9; }
+.cf-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.cf-btn.primary:disabled:hover { background: #1a8fe3; }
 
 .cf-search {
   flex: 1;
@@ -621,6 +733,8 @@ onErrorCaptured((e) => {
 
 .cf-op-btn:hover { background: #30363d; color: #e6edf3; }
 .cf-op-btn.danger:hover { background: rgba(248, 81, 73, 0.2); border-color: #f85149; color: #f85149; }
+.cf-op-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.cf-op-btn:disabled:hover { background: #21262d; color: #8b949e; border-color: #30363d; }
 
 /* ── rename input ── */
 .cf-rename-input {
