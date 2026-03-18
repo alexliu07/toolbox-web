@@ -20,6 +20,9 @@ const zoom = ref(1)
 const panX = ref(0)
 const panY = ref(0)
 const imageContainer = ref(null)
+const imageElement = ref(null)
+const imageNaturalWidth = ref(0)
+const imageNaturalHeight = ref(0)
 
 // Type checkers
 function isImage(mime) { return mime && mime.startsWith('image/') }
@@ -50,12 +53,42 @@ function goNext() {
 }
 
 // Image controls
+function clampPan() {
+  if (!imageContainer.value || !imageNaturalWidth.value || !imageNaturalHeight.value) return
+
+  const containerRect = imageContainer.value.getBoundingClientRect()
+  const containerWidth = containerRect.width
+  const containerHeight = containerRect.height
+
+  // Calculate scaled image dimensions
+  const scaledWidth = imageNaturalWidth.value * zoom.value
+  const scaledHeight = imageNaturalHeight.value * zoom.value
+
+  // If image is smaller than container, center it (no panning)
+  if (scaledWidth <= containerWidth) {
+    panX.value = 0
+  } else {
+    // Max pan distance = (scaledWidth - containerWidth) / 2
+    const maxPanX = (scaledWidth - containerWidth) / 2
+    panX.value = Math.max(-maxPanX, Math.min(maxPanX, panX.value))
+  }
+
+  if (scaledHeight <= containerHeight) {
+    panY.value = 0
+  } else {
+    const maxPanY = (scaledHeight - containerHeight) / 2
+    panY.value = Math.max(-maxPanY, Math.min(maxPanY, panY.value))
+  }
+}
+
 function zoomIn() {
   zoom.value = Math.min(zoom.value + 0.25, 5)
+  clampPan()
 }
 
 function zoomOut() {
   zoom.value = Math.max(zoom.value - 0.25, 0.25)
+  clampPan()
 }
 
 function resetZoom() {
@@ -66,18 +99,22 @@ function resetZoom() {
 
 function panUp() {
   panY.value += 50
+  clampPan()
 }
 
 function panDown() {
   panY.value -= 50
+  clampPan()
 }
 
 function panLeft() {
   panX.value += 50
+  clampPan()
 }
 
 function panRight() {
   panX.value -= 50
+  clampPan()
 }
 
 function resetImageControls() {
@@ -157,6 +194,13 @@ function handleMouseMove(e) {
 
 function handleMouseUp() {
   isDragging = false
+  clampPan()
+}
+
+function handleImageLoad(e) {
+  imageNaturalWidth.value = e.target.naturalWidth
+  imageNaturalHeight.value = e.target.naturalHeight
+  clampPan()
 }
 
 // Load text content
@@ -177,6 +221,8 @@ async function loadTextContent() {
 // Reset controls when file changes
 watch(() => props.fileUrl, () => {
   resetImageControls()
+  imageNaturalWidth.value = 0
+  imageNaturalHeight.value = 0
   loadTextContent()
 })
 
@@ -251,11 +297,13 @@ onUnmounted(() => {
         class="fv-image-container"
       >
         <img
+          ref="imageElement"
           :src="fileUrl"
           :alt="fileName"
           class="fv-image"
           :style="imageStyle"
           @mousedown="handleMouseDown"
+          @load="handleImageLoad"
         />
       </div>
 
