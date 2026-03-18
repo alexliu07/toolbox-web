@@ -56,4 +56,7 @@ server/desmos-saves/*
 server/drawings/*
 !server/drawings/.gitkeep
 
+# shared folders config (personal paths)
+server/shared-folders.json
+
 /.claude/
