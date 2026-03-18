@@ -54,21 +54,37 @@ function goNext() {
 
 // Image controls
 function clampPan() {
-  if (!imageContainer.value || !imageNaturalWidth.value || !imageNaturalHeight.value) return
+  if (!imageContainer.value || !imageElement.value || !imageNaturalWidth.value || !imageNaturalHeight.value) return
 
   const containerRect = imageContainer.value.getBoundingClientRect()
   const containerWidth = containerRect.width
   const containerHeight = containerRect.height
 
-  // Calculate scaled image dimensions
-  const scaledWidth = imageNaturalWidth.value * zoom.value
-  const scaledHeight = imageNaturalHeight.value * zoom.value
+  // Calculate display size (after max-width/max-height but before scale)
+  const aspectRatio = imageNaturalWidth.value / imageNaturalHeight.value
+  const containerAspectRatio = containerWidth / containerHeight
 
-  // If image is smaller than container, center it (no panning)
+  let displayWidth, displayHeight
+  if (aspectRatio > containerAspectRatio) {
+    // Image is wider, fit by width
+    displayWidth = Math.min(imageNaturalWidth.value, containerWidth)
+    displayHeight = displayWidth / aspectRatio
+  } else {
+    // Image is taller, fit by height
+    displayHeight = Math.min(imageNaturalHeight.value, containerHeight)
+    displayWidth = displayHeight * aspectRatio
+  }
+
+  // Calculate scaled dimensions (after zoom)
+  const scaledWidth = displayWidth * zoom.value
+  const scaledHeight = displayHeight * zoom.value
+
+  // Clamp pan values so image edges don't go beyond container edges
   if (scaledWidth <= containerWidth) {
     panX.value = 0
   } else {
-    // Max pan distance = (scaledWidth - containerWidth) / 2
+    // Max pan: image left edge at container left edge (panX > 0)
+    // Min pan: image right edge at container right edge (panX < 0)
     const maxPanX = (scaledWidth - containerWidth) / 2
     panX.value = Math.max(-maxPanX, Math.min(maxPanX, panX.value))
   }
