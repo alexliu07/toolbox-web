@@ -81,17 +81,15 @@ npm run server
 ```
 release/
 ├── dist/           # 前端静态文件
-├── server/         # 后端源码
-├── config.json     # 工具开关配置
-├── package.json
-└── package-lock.json
+├── server/         # 后端源码（含 package.json）
+└── config.json     # 工具开关配置
 ```
 
-### 2. 安装生产依赖
+### 2. 安装后端依赖
 
 ```bash
-cd release
-npm ci --omit=dev
+cd release/server
+npm install --production
 ```
 
 ### 3. 配置 config.json
@@ -101,7 +99,8 @@ npm ci --omit=dev
 ### 4. 启动后端
 
 ```bash
-node server/index.js
+cd server
+node index.js
 ```
 
 后端默认监听 **8081** 端口，提供 `/api/*` 接口。
@@ -143,7 +142,7 @@ server {
 | `server/desmos-saves/` | Desmos 图形 |
 | `server/uploads/` | 云文件上传的文件 |
 
-升级时只需覆盖 `dist/`、`server/`（源码部分）和 `package*.json`，数据目录单独备份/挂载即可。
+升级时只需覆盖 `dist/` 和 `server/`（源码部分），数据目录单独备份/挂载即可。
 
 ---
 

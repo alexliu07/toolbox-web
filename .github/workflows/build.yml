@@ -39,9 +39,6 @@ jobs:
           cp -r server    release/server
           # 运行时配置
           cp public/config.json release/config.json
-          # 依赖清单（部署时 npm ci --omit=dev）
-          cp package.json      release/package.json
-          cp package-lock.json release/package-lock.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
