@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted, provide, nextTick } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import DinoGame             from './components/DinoGame.vue'
 import ScientificCalculator from './components/ScientificCalculator.vue'
@@ -210,6 +210,32 @@ provide('openFileViewer', openFileViewer)
 provide('navigateFileViewer', navigateFileViewer)
 
 // ── taskbar ──
+// 存储任务栏按钮元素引用
+const taskbarButtonRefs = ref(new Map())
+
+function setTaskbarButtonRef(el, winId) {
+  if (el) {
+    taskbarButtonRefs.value.set(winId, el)
+  }
+}
+
+function getTaskbarButtonRect(winId) {
+  const el = taskbarButtonRefs.value.get(winId)
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      width: rect.width,
+      height: rect.height
+    }
+  }
+  return null
+}
+
+// 提供给子组件使用
+provide('getTaskbarButtonRect', getTaskbarButtonRect)
+
 // 按打开顺序排列，不随焦点变化
 const allOpenWindows = computed(() => {
   const tools = openWindows.value.map(w => ({
@@ -348,6 +374,7 @@ onUnmounted(() => clearInterval(timer))
         <button
           v-for="win in allOpenWindows"
           :key="win.id"
+          :ref="(el) => setTaskbarButtonRef(el, win.id)"
           class="taskbar-item"
           :class="{ 'taskbar-item--active': focusedWindowId === win.id && !win.minimized, 'taskbar-item--minimized': win.minimized }"
           @click="handleTaskbarClick(win)"
@@ -396,6 +423,7 @@ onUnmounted(() => clearInterval(timer))
     <AppWindow
       v-for="win in openWindows"
       :key="win.id"
+      :windowId="'tool-' + win.id"
       :title="win.tool.windowTitle"
       :icon="win.tool.windowIcon"
       :initial-width="win.tool.width"
@@ -413,6 +441,7 @@ onUnmounted(() => clearInterval(timer))
     <AppWindow
       v-for="win in pdfWindows"
       :key="'pdf-' + win.id"
+      :windowId="'pdf-' + win.id"
       :title="win.title"
       icon="📄"
       :initial-width="900"
@@ -430,6 +459,7 @@ onUnmounted(() => clearInterval(timer))
     <AppWindow
       v-for="win in fileWindows"
       :key="'file-' + win.id"
+      :windowId="'file-' + win.id"
       :title="win.fileName"
       :icon="win.icon"
       :initial-width="800"

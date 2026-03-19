@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
 
 const props = defineProps({
   title: { type: String, default: 'App' },
@@ -10,9 +10,13 @@ const props = defineProps({
   minHeight: { type: Number, default: 300 },
   zIndex: { type: Number, default: 1000 },
   minimized: { type: Boolean, default: false },
+  windowId: { type: String, default: '' },
 })
 
 const emit = defineEmits(['close', 'raise', 'minimize'])
+
+// 注入获取任务栏按钮位置的方法
+const getTaskbarButtonRect = inject('getTaskbarButtonRect', () => null)
 
 // ── position & size ──
 const x = ref(0)
@@ -28,6 +32,11 @@ const transitioning = ref(false)
 const prevRect = ref(null)
 const interacting = ref(false)
 
+// Windows 风格最小化动画状态
+const isAnimating = ref(false)
+const animationTransform = ref('')
+const isHidden = ref(false)
+
 onMounted(async () => {
   // center on screen
   x.value = Math.max(0, (window.innerWidth  - w.value) / 2)
@@ -37,12 +46,102 @@ onMounted(async () => {
   requestAnimationFrame(() => { opening.value = false })
 })
 
+// 监听 minimized 变化，触发动画
+watch(() => props.minimized, async (newVal, oldVal) => {
+  if (newVal === oldVal) return
+
+  if (newVal) {
+    await animateMinimize()
+  } else {
+    await animateRestore()
+  }
+})
+
+// Windows 风格最小化动画
+async function animateMinimize() {
+  const targetRect = getTaskbarButtonRect(props.windowId)
+  if (!targetRect) {
+    isHidden.value = true
+    return
+  }
+
+  isAnimating.value = true
+
+  // 窗口当前中心点
+  const windowCenterX = x.value + w.value / 2
+  const windowCenterY = y.value + h.value / 2
+
+  // 目标中心点（任务栏按钮中心）
+  const targetX = targetRect.x
+  const targetY = targetRect.y
+
+  // 计算需要移动的位移
+  const deltaX = targetX - windowCenterX
+  const deltaY = targetY - windowCenterY
+
+  // Windows 风格：缩小到约 10% 并移动到任务栏
+  const scale = 0.08
+
+  // 构建 transform：先移动再缩放（缩放是以中心点为基准的）
+  animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
+
+  // 等待动画完成
+  await new Promise(resolve => setTimeout(resolve, 280))
+
+  isAnimating.value = false
+  isHidden.value = true
+  animationTransform.value = ''
+}
+
+// Windows 风格还原动画
+async function animateRestore() {
+  const targetRect = getTaskbarButtonRect(props.windowId)
+
+  isHidden.value = false
+  isAnimating.value = true
+
+  if (targetRect) {
+    // 窗口目标中心点
+    const windowCenterX = x.value + w.value / 2
+    const windowCenterY = y.value + h.value / 2
+
+    // 起始中心点（任务栏按钮中心）
+    const startX = targetRect.x
+    const startY = targetRect.y
+
+    // 计算起始位移
+    const deltaX = startX - windowCenterX
+    const deltaY = startY - windowCenterY
+
+    const scale = 0.08
+
+    // 先设置起始位置（任务栏处，缩小状态）
+    animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
+
+    // 强制回流确保样式应用
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+
+    // 下一帧开始飞回动画
+    await new Promise(resolve => requestAnimationFrame(resolve))
+
+    // 移除变换，飞回原位置
+    animationTransform.value = ''
+
+    // 等待动画完成
+    await new Promise(resolve => setTimeout(resolve, 280))
+  }
+
+  isAnimating.value = false
+}
+
 // ── drag ──
 let dragging = false
 let dragOX = 0, dragOY = 0
 
 function onTitleMouseDown(e) {
   if (maximized.value) return
+  if (isAnimating.value || isHidden.value) return
   if (e.button !== 0) return
   dragging = true
   interacting.value = true
@@ -74,6 +173,7 @@ let resizeW0 = 0, resizeH0 = 0
 
 function onResizeMouseDown(e, dir) {
   if (maximized.value) return
+  if (isAnimating.value || isHidden.value) return
   if (e.button !== 0) return
   resizing   = true
   interacting.value = true
@@ -117,6 +217,7 @@ function onResizeUp() {
 
 // ── maximize / restore ──
 function toggleMaximize() {
+  if (isAnimating.value || isHidden.value) return
   transitioning.value = true
   if (maximized.value) {
     const r = prevRect.value
@@ -147,6 +248,9 @@ const windowStyle = computed(() => ({
   width:  w.value + 'px',
   height: h.value + 'px',
   zIndex: props.zIndex,
+  transform: animationTransform.value,
+  opacity: isHidden.value ? 0 : undefined,
+  pointerEvents: isHidden.value ? 'none' : undefined,
 }))
 
 onUnmounted(() => {
@@ -160,12 +264,12 @@ onUnmounted(() => {
 <template>
   <div
     class="app-window"
-    :class="{ maximized, opening, closing, transitioning, minimized }"
+    :class="{ maximized, opening, closing, transitioning, 'animating': isAnimating, 'hidden': isHidden }"
     :style="windowStyle"
-    @mousedown.capture="emit('raise')"
+    @mousedown.capture="!isAnimating && !isHidden && emit('raise')"
   >
     <!-- resize handles (8 directions) -->
-    <template v-if="!maximized">
+    <template v-if="!maximized && !isAnimating && !isHidden">
       <div class="rh rh-n"  @mousedown.stop="onResizeMouseDown($event,'n')"/>
       <div class="rh rh-s"  @mousedown.stop="onResizeMouseDown($event,'s')"/>
       <div class="rh rh-e"  @mousedown.stop="onResizeMouseDown($event,'e')"/>
@@ -228,6 +332,17 @@ onUnmounted(() => {
     opacity   0.22s ease;
 }
 
+/* Windows 风格最小化动画 */
+.app-window.animating {
+  transition:
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity   0.2s ease;
+}
+
+.app-window.hidden {
+  pointer-events: none;
+}
+
 .app-window.transitioning {
   transition:
     left          0.3s cubic-bezier(0.4, 0, 0.2, 1),
@@ -247,12 +362,6 @@ onUnmounted(() => {
 .app-window.closing {
   transform: scale(0.55);
   opacity: 0;
-}
-
-.app-window.minimized {
-  transform: scale(0.65) translateY(-30px);
-  opacity: 0;
-  pointer-events: none;
 }
 
 .app-window.maximized {
