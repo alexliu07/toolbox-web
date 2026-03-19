@@ -102,9 +102,9 @@ async function loadConfig() {
 }
 
 // ── open windows ──
-const openWindows = ref([])      // array of { id, toolId, tool, zIndex }
-const pdfWindows = ref([])       // array of { id, pdfUrl, title, zIndex }
-const fileWindows = ref([])      // array of { id, fileUrl, fileName, mimeType, zIndex }
+const openWindows = ref([])      // array of { id, toolId, tool, zIndex, minimized }
+const pdfWindows = ref([])       // array of { id, pdfUrl, title, zIndex, minimized }
+const fileWindows = ref([])      // array of { id, fileUrl, fileName, mimeType, zIndex, minimized }
 let winSeq = 0
 let pdfWinSeq = 0
 let fileWinSeq = 0
@@ -113,7 +113,7 @@ let zCounter = 1000
 function openTool(tool) {
   // only one instance per tool
   if (openWindows.value.find(w => w.toolId === tool.id)) return
-  openWindows.value.push({ id: ++winSeq, toolId: tool.id, tool, zIndex: ++zCounter })
+  openWindows.value.push({ id: ++winSeq, toolId: tool.id, tool, zIndex: ++zCounter, minimized: false })
 }
 
 function closeWindow(winId) {
@@ -130,17 +130,26 @@ function closeFileWindow(winId) {
 
 function bringToFront(winId) {
   const win = openWindows.value.find(w => w.id === winId)
-  if (win) win.zIndex = ++zCounter
+  if (win) {
+    win.zIndex = ++zCounter
+    win.minimized = false
+  }
 }
 
 function bringPDFToFront(winId) {
   const win = pdfWindows.value.find(w => w.id === winId)
-  if (win) win.zIndex = ++zCounter
+  if (win) {
+    win.zIndex = ++zCounter
+    win.minimized = false
+  }
 }
 
 function bringFileToFront(winId) {
   const win = fileWindows.value.find(w => w.id === winId)
-  if (win) win.zIndex = ++zCounter
+  if (win) {
+    win.zIndex = ++zCounter
+    win.minimized = false
+  }
 }
 
 // Open PDF in new window
@@ -149,7 +158,8 @@ function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
     id: ++pdfWinSeq,
     pdfUrl,
     title: title.length > 40 ? title.slice(0, 37) + '...' : title,
-    zIndex: ++zCounter
+    zIndex: ++zCounter,
+    minimized: false
   })
 }
 
@@ -170,7 +180,8 @@ function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex
     icon,
     fileList,
     currentIndex,
-    zIndex: ++zCounter
+    zIndex: ++zCounter,
+    minimized: false
   })
 }
 
@@ -198,6 +209,123 @@ provide('openPDFViewer', openPDFViewer)
 provide('openFileViewer', openFileViewer)
 provide('navigateFileViewer', navigateFileViewer)
 
+// ── taskbar ──
+// 按打开顺序排列，不随焦点变化
+const allOpenWindows = computed(() => {
+  const tools = openWindows.value.map(w => ({
+    id: `tool-${w.id}`,
+    winId: w.id,
+    type: 'tool',
+    title: w.tool.windowTitle,
+    icon: w.tool.windowIcon,
+    zIndex: w.zIndex,
+    minimized: w.minimized,
+    bringToFront: () => bringToFront(w.id),
+    minimize: () => minimizeToolWindow(w.id),
+    restore: () => restoreToolWindow(w.id)
+  }))
+  const pdfs = pdfWindows.value.map(w => ({
+    id: `pdf-${w.id}`,
+    winId: w.id,
+    type: 'pdf',
+    title: w.title,
+    icon: '📄',
+    zIndex: w.zIndex,
+    minimized: w.minimized,
+    bringToFront: () => bringPDFToFront(w.id),
+    minimize: () => minimizePDFWindow(w.id),
+    restore: () => restorePDFWindow(w.id)
+  }))
+  const files = fileWindows.value.map(w => ({
+    id: `file-${w.id}`,
+    winId: w.id,
+    type: 'file',
+    title: w.fileName,
+    icon: w.icon,
+    zIndex: w.zIndex,
+    minimized: w.minimized,
+    bringToFront: () => bringFileToFront(w.id),
+    minimize: () => minimizeFileWindow(w.id),
+    restore: () => restoreFileWindow(w.id)
+  }))
+  // 保持打开顺序，不按 zIndex 排序
+  return [...tools, ...pdfs, ...files]
+})
+
+// 当前焦点窗口（zIndex 最高的）
+const focusedWindowId = computed(() => {
+  const all = [...openWindows.value, ...pdfWindows.value, ...fileWindows.value]
+  if (all.length === 0) return null
+  const maxZ = Math.max(...all.map(w => w.zIndex))
+  const focused = all.find(w => w.zIndex === maxZ)
+  if (!focused) return null
+  if (openWindows.value.includes(focused)) return `tool-${focused.id}`
+  if (pdfWindows.value.includes(focused)) return `pdf-${focused.id}`
+  if (fileWindows.value.includes(focused)) return `file-${focused.id}`
+  return null
+})
+
+const hasOpenWindows = computed(() => allOpenWindows.value.length > 0)
+
+function minimizeToolWindow(winId) {
+  const win = openWindows.value.find(w => w.id === winId)
+  if (win) win.minimized = true
+}
+
+function minimizePDFWindow(winId) {
+  const win = pdfWindows.value.find(w => w.id === winId)
+  if (win) win.minimized = true
+}
+
+function minimizeFileWindow(winId) {
+  const win = fileWindows.value.find(w => w.id === winId)
+  if (win) win.minimized = true
+}
+
+function restoreToolWindow(winId) {
+  const win = openWindows.value.find(w => w.id === winId)
+  if (win) {
+    win.minimized = false
+    bringToFront(winId)
+  }
+}
+
+function restorePDFWindow(winId) {
+  const win = pdfWindows.value.find(w => w.id === winId)
+  if (win) {
+    win.minimized = false
+    bringPDFToFront(winId)
+  }
+}
+
+function restoreFileWindow(winId) {
+  const win = fileWindows.value.find(w => w.id === winId)
+  if (win) {
+    win.minimized = false
+    bringFileToFront(winId)
+  }
+}
+
+// 判断窗口是否处于焦点（zIndex 最高且未最小化）
+function isWindowFocused(win) {
+  return focusedWindowId.value === win.id && !win.minimized
+}
+
+function handleTaskbarClick(win) {
+  // 如果窗口已最小化，则还原
+  if (win.minimized) {
+    win.restore()
+    return
+  }
+  // 如果窗口已经是焦点窗口，则最小化
+  if (isWindowFocused(win)) {
+    win.minimize()
+  } else {
+    // 否则聚焦窗口
+    win.bringToFront()
+  }
+}
+
 onMounted(() => {
   timer = setInterval(() => { now.value = new Date() }, 1000)
   loadConfig()
@@ -212,6 +340,23 @@ onUnmounted(() => clearInterval(timer))
       <div class="orb orb-1"></div>
       <div class="orb orb-2"></div>
       <div class="orb orb-3"></div>
+    </div>
+
+    <!-- 任务栏 -->
+    <div class="taskbar" v-show="hasOpenWindows">
+      <div class="taskbar-items">
+        <button
+          v-for="win in allOpenWindows"
+          :key="win.id"
+          class="taskbar-item"
+          :class="{ 'taskbar-item--active': focusedWindowId === win.id && !win.minimized, 'taskbar-item--minimized': win.minimized }"
+          @click="handleTaskbarClick(win)"
+          :title="win.title"
+        >
+          <span class="taskbar-icon">{{ win.icon }}</span>
+          <span class="taskbar-title">{{ win.title }}</span>
+        </button>
+      </div>
     </div>
 
     <main class="content">
@@ -256,8 +401,10 @@ onUnmounted(() => clearInterval(timer))
       :initial-width="win.tool.width"
       :initial-height="win.tool.height"
       :zIndex="win.zIndex"
+      :minimized="win.minimized"
       @close="closeWindow(win.id)"
       @raise="bringToFront(win.id)"
+      @minimize="minimizeToolWindow(win.id)"
     >
       <component :is="win.tool.component" />
     </AppWindow>
@@ -271,8 +418,10 @@ onUnmounted(() => clearInterval(timer))
       :initial-width="900"
       :initial-height="700"
       :zIndex="win.zIndex"
+      :minimized="win.minimized"
       @close="closePDFWindow(win.id)"
       @raise="bringPDFToFront(win.id)"
+      @minimize="minimizePDFWindow(win.id)"
     >
       <PDFViewer :pdfUrl="win.pdfUrl" />
     </AppWindow>
@@ -286,8 +435,10 @@ onUnmounted(() => clearInterval(timer))
       :initial-width="800"
       :initial-height="600"
       :zIndex="win.zIndex"
+      :minimized="win.minimized"
       @close="closeFileWindow(win.id)"
       @raise="bringFileToFront(win.id)"
+      @minimize="minimizeFileWindow(win.id)"
     >
       <FileViewer
         :fileUrl="win.fileUrl"
@@ -392,7 +543,7 @@ onUnmounted(() => clearInterval(timer))
   width: 100%;
   display: flex;
   justify-content: center;
-  padding-top: 80px;
+  padding-top: 100px;
 }
 
 .clock-card {
@@ -540,5 +691,116 @@ onUnmounted(() => clearInterval(timer))
   .launcher-grid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 20px 12px; }
   .tool-icon-wrap { width: 64px; height: 64px; border-radius: 16px; }
   .tool-icon { font-size: 30px; }
+}
+
+/* ── 任务栏 ── */
+.taskbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.taskbar-items {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(20, 24, 40, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: auto;
+  max-width: 90vw;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.taskbar-items::-webkit-scrollbar {
+  display: none;
+}
+
+.taskbar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.taskbar-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.taskbar-item:active {
+  transform: translateY(0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.taskbar-item--active {
+  background: rgba(99, 102, 241, 0.35);
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+}
+
+.taskbar-item--active:hover {
+  background: rgba(99, 102, 241, 0.45);
+  border-color: rgba(99, 102, 241, 0.7);
+}
+
+.taskbar-item--minimized {
+  opacity: 0.6;
+}
+
+.taskbar-item--minimized .taskbar-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.taskbar-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.taskbar-title {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .taskbar {
+    padding: 8px 12px;
+  }
+  .taskbar-items {
+    padding: 4px 6px;
+    gap: 4px;
+  }
+  .taskbar-item {
+    padding: 6px 10px;
+  }
+  .taskbar-title {
+    max-width: 80px;
+    font-size: 12px;
+  }
 }
 </style>

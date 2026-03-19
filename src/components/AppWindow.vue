@@ -9,9 +9,10 @@ const props = defineProps({
   minWidth: { type: Number, default: 400 },
   minHeight: { type: Number, default: 300 },
   zIndex: { type: Number, default: 1000 },
+  minimized: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['close', 'raise'])
+const emit = defineEmits(['close', 'raise', 'minimize'])
 
 // ── position & size ──
 const x = ref(0)
@@ -159,7 +160,7 @@ onUnmounted(() => {
 <template>
   <div
     class="app-window"
-    :class="{ maximized, opening, closing, transitioning }"
+    :class="{ maximized, opening, closing, transitioning, minimized }"
     :style="windowStyle"
     @mousedown.capture="emit('raise')"
   >
@@ -186,6 +187,9 @@ onUnmounted(() => {
         <span class="win-title">{{ title }}</span>
       </div>
       <div class="title-btns">
+        <button class="wb wb-min" @click.stop="emit('minimize')" title="最小化">
+          <svg viewBox="0 0 10 10"><line x1="1" y1="9" x2="9" y2="9" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
         <button class="wb wb-max" @click.stop="toggleMaximize" :title="maximized ? '还原' : '最大化'">
           <svg v-if="!maximized" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
           <svg v-else viewBox="0 0 10 10">
@@ -245,6 +249,12 @@ onUnmounted(() => {
   opacity: 0;
 }
 
+.app-window.minimized {
+  transform: scale(0.65) translateY(-30px);
+  opacity: 0;
+  pointer-events: none;
+}
+
 .app-window.maximized {
   border-radius: 0;
   border: none;
@@ -301,6 +311,7 @@ onUnmounted(() => {
 }
 .wb svg { width: 10px; height: 10px; }
 
+.wb-min:hover  { background: rgba(255,255,255,0.1); color: #fff; }
 .wb-max:hover  { background: rgba(255,255,255,0.1); color: #fff; }
 .wb-close:hover { background: #e74c3c; color: #fff; }
 
