@@ -36,6 +36,12 @@ const interacting = ref(false)
 const isAnimating = ref(false)
 const animationTransform = ref('')
 const isHidden = ref(false)
+let currentAnimationId = 0
+
+// 生成唯一动画 ID，用于处理动画中断
+function getAnimationId() {
+  return ++currentAnimationId
+}
 
 onMounted(async () => {
   // center on screen
@@ -65,6 +71,7 @@ async function animateMinimize() {
     return
   }
 
+  const animId = getAnimationId()
   isAnimating.value = true
 
   // 窗口当前中心点
@@ -79,58 +86,84 @@ async function animateMinimize() {
   const deltaX = targetX - windowCenterX
   const deltaY = targetY - windowCenterY
 
-  // Windows 风格：缩小到约 10% 并移动到任务栏
-  const scale = 0.08
+  // Windows 风格：缩小到约 5% 并移动到任务栏
+  const scale = 0.05
 
-  // 构建 transform：先移动再缩放（缩放是以中心点为基准的）
+  // 构建 transform
   animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
 
-  // 等待动画完成
-  await new Promise(resolve => setTimeout(resolve, 280))
+  // 在抵达任务栏之前就隐藏（只等待80%的动画时间）
+  await new Promise(resolve => setTimeout(resolve, 160))
+
+  // 检查动画是否被中断
+  if (animId !== currentAnimationId) return
+
+  // 提前隐藏窗口（此时还未完全抵达任务栏）
+  isHidden.value = true
+
+  // 再等待一小段时间让动画基本完成
+  await new Promise(resolve => setTimeout(resolve, 40))
+
+  // 检查动画是否被中断
+  if (animId !== currentAnimationId) return
 
   isAnimating.value = false
-  isHidden.value = true
-  animationTransform.value = ''
 }
 
 // Windows 风格还原动画
 async function animateRestore() {
   const targetRect = getTaskbarButtonRect(props.windowId)
 
-  isHidden.value = false
+  if (!targetRect) {
+    isHidden.value = false
+    animationTransform.value = ''
+    return
+  }
+
+  const animId = getAnimationId()
   isAnimating.value = true
 
-  if (targetRect) {
-    // 窗口目标中心点
-    const windowCenterX = x.value + w.value / 2
-    const windowCenterY = y.value + h.value / 2
+  // 窗口目标中心点
+  const windowCenterX = x.value + w.value / 2
+  const windowCenterY = y.value + h.value / 2
 
-    // 起始中心点（任务栏按钮中心）
-    const startX = targetRect.x
-    const startY = targetRect.y
+  // 起始中心点（任务栏按钮中心）
+  const startX = targetRect.x
+  const startY = targetRect.y
 
-    // 计算起始位移
-    const deltaX = startX - windowCenterX
-    const deltaY = startY - windowCenterY
+  // 计算起始位移
+  const deltaX = startX - windowCenterX
+  const deltaY = startY - windowCenterY
 
-    const scale = 0.08
+  const scale = 0.05
 
-    // 先设置起始位置（任务栏处，缩小状态）
-    animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
+  // 先设置起始位置（任务栏处，缩小状态），但窗口仍隐藏
+  animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
 
-    // 强制回流确保样式应用
-    await nextTick()
-    await new Promise(resolve => requestAnimationFrame(resolve))
+  // 强制回流确保样式应用
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
 
-    // 下一帧开始飞回动画
-    await new Promise(resolve => requestAnimationFrame(resolve))
+  // 检查动画是否被中断
+  if (animId !== currentAnimationId) return
 
-    // 移除变换，飞回原位置
-    animationTransform.value = ''
+  // 显示窗口（此时已经在任务栏位置，不会闪现）
+  isHidden.value = false
 
-    // 等待动画完成
-    await new Promise(resolve => setTimeout(resolve, 280))
-  }
+  // 下一帧开始飞回动画
+  await new Promise(resolve => requestAnimationFrame(resolve))
+
+  // 检查动画是否被中断
+  if (animId !== currentAnimationId) return
+
+  // 移除变换，飞回原位置
+  animationTransform.value = ''
+
+  // 等待动画完成（200ms，更快完成）
+  await new Promise(resolve => setTimeout(resolve, 200))
+
+  // 检查动画是否被中断
+  if (animId !== currentAnimationId) return
 
   isAnimating.value = false
 }
@@ -332,11 +365,11 @@ onUnmounted(() => {
     opacity   0.22s ease;
 }
 
-/* Windows 风格最小化动画 */
+/* Windows 风格最小化动画 - 更快完成 */
 .app-window.animating {
   transition:
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity   0.2s ease;
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity   0.15s ease;
 }
 
 .app-window.hidden {

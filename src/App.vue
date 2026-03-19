@@ -375,7 +375,7 @@ onUnmounted(() => clearInterval(timer))
           v-for="win in allOpenWindows"
           :key="win.id"
           :ref="(el) => setTaskbarButtonRef(el, win.id)"
-          class="taskbar-item"
+                    class="taskbar-item"
           :class="{ 'taskbar-item--active': focusedWindowId === win.id && !win.minimized, 'taskbar-item--minimized': win.minimized }"
           @click="handleTaskbarClick(win)"
           :title="win.title"
