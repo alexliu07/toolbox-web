@@ -13,6 +13,7 @@
 | ☁️ 云文件 | 文件管理器，支持上传、下载、重命名、删除、预览 |
 | 📄 PDF 查看器 | 基于 pdf.js 的 PDF 阅读器，支持缩放、翻页 |
 | 🖼 文件预览 | 支持图片、文本、视频、音频等多种格式预览 |
+|   有道词典 | 英汉词典查询，支持联想建议、音标、发音播放 |
 
 ## 🚀 快速开始
 
@@ -51,7 +52,8 @@ npm run server
   "calculator": { "enabled": true },
   "desmos": { "enabled": true },
   "drawing": { "enabled": true },
-  "cloudfiles": { "enabled": true }
+  "cloudfiles": { "enabled": true },
+  "youdao": { "enabled": true }
 }
 ```
 

@@ -13,5 +13,8 @@
   },
   "cloudfiles": {
     "enabled": true
+  },
+  "youdao": {
+    "enabled": true
   }
 }

@@ -8,6 +8,7 @@ import DrawingBoard         from './components/DrawingBoard.vue'
 import CloudFiles           from './components/CloudFiles.vue'
 import PDFViewer            from './components/PDFViewer.vue'
 import FileViewer           from './components/FileViewer.vue'
+import YoudaoDictionary     from './components/YoudaoDictionary.vue'
 
 const now = ref(new Date())
 let timer = null
@@ -80,6 +81,17 @@ const allTools = [
     windowIcon: '☁️',
     width: 900,
     height: 600,
+  },
+  {
+    id: 'youdao',
+    name: '有道词典',
+    icon: '📚',
+    gradient: 'linear-gradient(135deg,#e11d48,#be123c)',
+    component: markRaw(YoudaoDictionary),
+    windowTitle: '有道词典',
+    windowIcon: '📚',
+    width: 600,
+    height: 520,
   },
 ]
 
