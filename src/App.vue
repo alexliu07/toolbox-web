@@ -370,12 +370,12 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 任务栏 -->
     <div class="taskbar" v-show="hasOpenWindows">
-      <div class="taskbar-items">
+      <TransitionGroup name="taskbar" tag="div" class="taskbar-items">
         <button
           v-for="win in allOpenWindows"
           :key="win.id"
           :ref="(el) => setTaskbarButtonRef(el, win.id)"
-                    class="taskbar-item"
+          class="taskbar-item"
           :class="{ 'taskbar-item--active': focusedWindowId === win.id && !win.minimized, 'taskbar-item--minimized': win.minimized }"
           @click="handleTaskbarClick(win)"
           :title="win.title"
@@ -383,7 +383,7 @@ onUnmounted(() => clearInterval(timer))
           <span class="taskbar-icon">{{ win.icon }}</span>
           <span class="taskbar-title">{{ win.title }}</span>
         </button>
-      </div>
+      </TransitionGroup>
     </div>
 
     <main class="content">
@@ -817,6 +817,32 @@ onUnmounted(() => clearInterval(timer))
   white-space: nowrap;
 }
 
+/* ── 任务栏标签伸缩动画 -- */
+.taskbar-enter-active,
+.taskbar-leave-active {
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.taskbar-enter-from {
+  opacity: 0;
+  transform: scaleX(0);
+  max-width: 0;
+  padding: 8px 0;
+  margin: 0;
+}
+
+.taskbar-leave-to {
+  opacity: 0;
+  transform: scaleX(0);
+  max-width: 0;
+  padding: 8px 0;
+  margin: 0;
+}
+
+.taskbar-move {
+  transition: transform 0.2s ease;
+}
+
 @media (max-width: 600px) {
   .taskbar {
     padding: 8px 12px;
@@ -831,6 +857,10 @@ onUnmounted(() => clearInterval(timer))
   .taskbar-title {
     max-width: 80px;
     font-size: 12px;
+  }
+  .taskbar-enter-from,
+  .taskbar-leave-to {
+    padding: 6px 0;
   }
 }
 </style>
