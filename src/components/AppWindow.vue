@@ -36,6 +36,7 @@ const interacting = ref(false)
 const isAnimating = ref(false)
 const animationTransform = ref('')
 const isHidden = ref(false)
+const noTransition = ref(false)
 let currentAnimationId = 0
 
 // 生成唯一动画 ID，用于处理动画中断
@@ -121,13 +122,16 @@ async function animateRestore() {
   }
 
   const animId = getAnimationId()
+
+  // 禁用过渡，瞬间跳到任务栏按钮的当前位置
+  noTransition.value = true
   isAnimating.value = true
 
   // 窗口目标中心点
   const windowCenterX = x.value + w.value / 2
   const windowCenterY = y.value + h.value / 2
 
-  // 起始中心点（任务栏按钮中心）
+  // 起始中心点（任务栏按钮中心，实时读取）
   const startX = targetRect.x
   const startY = targetRect.y
 
@@ -137,7 +141,7 @@ async function animateRestore() {
 
   const scale = 0.05
 
-  // 先设置起始位置（任务栏处，缩小状态），但窗口仍隐藏
+  // 先设置起始位置（任务栏处，缩小状态），无过渡瞬间到位
   animationTransform.value = `translate(${deltaX}px, ${deltaY}px) scale(${scale})`
 
   // 强制回流确保样式应用
@@ -150,6 +154,9 @@ async function animateRestore() {
   // 显示窗口（此时已经在任务栏位置，不会闪现）
   isHidden.value = false
 
+  // 恢复过渡，准备飞回动画
+  noTransition.value = false
+
   // 下一帧开始飞回动画
   await new Promise(resolve => requestAnimationFrame(resolve))
 
@@ -159,7 +166,7 @@ async function animateRestore() {
   // 移除变换，飞回原位置
   animationTransform.value = ''
 
-  // 等待动画完成（200ms，更快完成）
+  // 等待动画完成（200ms）
   await new Promise(resolve => setTimeout(resolve, 200))
 
   // 检查动画是否被中断
@@ -297,7 +304,7 @@ onUnmounted(() => {
 <template>
   <div
     class="app-window"
-    :class="{ maximized, opening, closing, transitioning, 'animating': isAnimating, 'hidden': isHidden }"
+    :class="{ maximized, opening, closing, transitioning, 'animating': isAnimating, 'hidden': isHidden, 'no-transition': noTransition }"
     :style="windowStyle"
     @mousedown.capture="!isAnimating && !isHidden && emit('raise')"
   >
@@ -370,6 +377,11 @@ onUnmounted(() => {
   transition:
     transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
     opacity   0.15s ease;
+}
+
+/* 禁用过渡，用于还原时瞬间跳到任务栏当前位置 */
+.app-window.no-transition {
+  transition: none !important;
 }
 
 .app-window.hidden {
