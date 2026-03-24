@@ -60,3 +60,7 @@ server/drawings/*
 server/shared-folders.json
 
 /.claude/
+/package-lock.json
+/server/package-lock.json
+/server/database/*
+!/server/database/.gitkeep
