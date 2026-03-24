@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
 
 // ── reactive tool state (used in template) ──
 const tool       = ref('pen')
@@ -27,6 +27,8 @@ let vpX = 0, vpY = 0
 // ── stroke storage (plain, not reactive) ──
 let strokes = []
 let seq = 0
+
+const authFetch = inject('authFetch')
 
 // ── transient state ──
 let liveStroke      = null
@@ -411,7 +413,7 @@ function clearAll() {
 // ──────────────────────────────────────────────
 async function loadSavesList() {
   try {
-    const res = await fetch('/api/drawings')
+    const res = await authFetch('/api/drawings')
     saves.value = await res.json()
   } catch { /* ignore */ }
 }
@@ -420,7 +422,7 @@ async function saveDrawing() {
   const name = saveName.value.trim() || '未命名'
   saveStatus.value = 'saving'
   try {
-    const res = await fetch('/api/drawings', {
+    const res = await authFetch('/api/drawings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -445,7 +447,7 @@ async function saveDrawing() {
 
 async function loadDrawing(name) {
   try {
-    const res = await fetch(`/api/drawings/${encodeURIComponent(name)}`)
+    const res = await authFetch(`/api/drawings/${encodeURIComponent(name)}`)
     const data = await res.json()
     strokes = (data.strokes || []).map(s => ({ ...s, id: s.id || ++seq }))
     if (data.viewport) { vpX = data.viewport.x || 0; vpY = data.viewport.y || 0 }
@@ -459,7 +461,7 @@ async function loadDrawing(name) {
 
 async function deleteDrawing(name) {
   if (!confirm(`删除存档 "${name}"？`)) return
-  await fetch(`/api/drawings/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  await authFetch(`/api/drawings/${encodeURIComponent(name)}`, { method: 'DELETE' })
   await loadSavesList()
 }
 

@@ -4,6 +4,16 @@ import { ref, computed, onMounted, onErrorCaptured, inject } from 'vue'
 // ── state ──
 const openPDFViewer = inject('openPDFViewer')
 const openFileViewer = inject('openFileViewer')
+const authFetch = inject('authFetch')
+const authToken = inject('authToken')
+
+// Build a raw file URL, appending ?token= for routes that need auth
+// but are accessed via <img src>, <video src>, <a href> (can't set headers)
+function rawUrl(fileName) {
+  const base = `/api/files/raw/${encodeURIComponent(fileName)}`
+  const t = authToken?.value
+  return t ? `${base}?token=${encodeURIComponent(t)}` : base
+}
 const files = ref([])
 const loading = ref(false)
 const error = ref('')
@@ -104,7 +114,7 @@ async function fetchFiles() {
     } else {
       url = '/api/files'
     }
-    const res = await fetch(url)
+    const res = await authFetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     files.value = await res.json()
   } catch (e) {
@@ -153,7 +163,7 @@ async function uploadFiles(fileList) {
     const fd = new FormData()
     fd.append('file', arr[i])
     try {
-      const res = await fetch('/api/files/upload', { method: 'POST', body: fd })
+      const res = await authFetch('/api/files/upload', { method: 'POST', body: fd })
       if (!res.ok) {
         const body = await res.json()
         uploadProgress.value[i].error = body.error || 'Upload failed'
@@ -171,7 +181,7 @@ async function uploadFiles(fileList) {
 async function deleteFile(name) {
   if (!confirm(`确认删除文件 "${name}"？`)) return
   try {
-    const res = await fetch(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    const res = await authFetch(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' })
     if (!res.ok) {
       const body = await res.json()
       alert(body.error || '删除失败')
@@ -190,7 +200,7 @@ function downloadFile(file) {
     const filePath = currentPath.value ? `${currentPath.value}/${file.name}` : file.name
     url = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
   } else {
-    url = `/api/files/raw/${encodeURIComponent(file.name)}`
+    url = rawUrl(file.name)
   }
   link.href = url
   link.download = file.name
@@ -207,7 +217,7 @@ async function confirmRename(oldName) {
   renaming.value = null
   if (!newName || newName === oldName) return
   try {
-    const res = await fetch('/api/files/rename', {
+    const res = await authFetch('/api/files/rename', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ oldName, newName }),
@@ -232,7 +242,7 @@ async function openPreview(file) {
     const filePath = currentPath.value ? `${currentPath.value}/${file.name}` : file.name
     fileUrl = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
   } else {
-    fileUrl = `/api/files/raw/${encodeURIComponent(file.name)}`
+    fileUrl = rawUrl(file.name)
   }
 
   // Open PDF in PDF viewer
@@ -255,7 +265,7 @@ async function openPreview(file) {
             const filePath = currentPath.value ? `${currentPath.value}/${f.name}` : f.name
             url = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
           } else {
-            url = `/api/files/raw/${encodeURIComponent(f.name)}`
+            url = rawUrl(f.name)
           }
           return { name: f.name, url, mime: f.mime }
         })
@@ -426,7 +436,7 @@ onErrorCaptured((e) => {
         class="cf-grid-item"
       >
         <div class="cf-grid-thumb" @click="openPreview(file)">
-          <img v-if="file.type !== 'folder' && isImage(file.mime)" :src="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${currentPath ? currentPath + '/' : ''}${file.name}` : `/api/files/raw/${encodeURIComponent(file.name)}`" :alt="file.name" />
+          <img v-if="file.type !== 'folder' && isImage(file.mime)" :src="currentFolder ? `/api/shared-folders/${currentFolder}/raw/${currentPath ? currentPath + '/' : ''}${file.name}` : rawUrl(file.name)" :alt="file.name" />
           <span v-else class="cf-grid-type-icon">{{ fileTypeIcon(file.mime, file.type) }}</span>
         </div>
         <div class="cf-grid-info">

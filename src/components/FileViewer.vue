@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, inject } from 'vue'
 
 const props = defineProps({
   fileUrl: { type: String, required: true },
@@ -10,6 +10,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['navigate'])
+
+const authToken = inject('authToken', null)
 
 const textContent = ref('')
 const loading = ref(false)
@@ -224,7 +226,10 @@ async function loadTextContent() {
   if (!isText(props.mimeType)) return
   loading.value = true
   try {
-    const res = await fetch(props.fileUrl)
+    const headers = {}
+    const token = authToken?.value
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(props.fileUrl, { headers })
     textContent.value = await res.text()
   } catch {
     textContent.value = '(无法加载内容)'

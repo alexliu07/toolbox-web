@@ -1,13 +1,15 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, inject } from 'vue'
 
 const iframeRef = ref(null)
 const iframeLoaded = ref(false)
 let savedScore = 0
 
+const authFetch = inject('authFetch')
+
 async function loadHighScore() {
   try {
-    const res = await fetch('/api/data/dino-highscore')
+    const res = await authFetch('/api/data/dino-highscore')
     const data = await res.json()
     if (data && data.score > 0) savedScore = data.score
   } catch { /* ignore */ }
@@ -15,7 +17,7 @@ async function loadHighScore() {
 
 async function saveHighScore(score) {
   try {
-    await fetch('/api/data/dino-highscore', {
+    await authFetch('/api/data/dino-highscore', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ score }),

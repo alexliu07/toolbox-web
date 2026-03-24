@@ -1,50 +1,55 @@
 import express from 'express'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { requireAuth } from '../middleware/auth.js'
+import {
+  getUserDesmosSaves,
+  getUserDesmosSave,
+  saveUserDesmos,
+  deleteUserDesmos,
+} from '../db.js'
 
 const router = express.Router()
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SAVES_DIR = path.join(__dirname, '..', 'desmos-saves')
-
-fs.mkdirSync(SAVES_DIR, { recursive: true })
-
-function safeName(name) {
-  return path.basename(name.replace(/[^\w\u4e00-\u9fa5 \-]/g, '_').trim())
-}
 
 // GET /api/desmos — list saves
-router.get('/', (_req, res) => {
-  const files = fs.readdirSync(SAVES_DIR).filter(f => f.endsWith('.json'))
-  const list = files.map(f => {
-    const stat = fs.statSync(path.join(SAVES_DIR, f))
-    return { name: f.slice(0, -5), mtime: stat.mtime.toISOString() }
-  }).sort((a, b) => new Date(b.mtime) - new Date(a.mtime))
-  res.json(list)
+router.get('/', requireAuth, (_req, res) => {
+  try {
+    const list = getUserDesmosSaves(_req.user.id)
+    res.json(list)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // POST /api/desmos — save { name, state }
-router.post('/', (req, res) => {
+router.post('/', requireAuth, (req, res) => {
   const { name, state } = req.body
   if (!name || !state) return res.status(400).json({ error: 'name and state required' })
-  const file = path.join(SAVES_DIR, safeName(name) + '.json')
-  fs.writeFileSync(file, JSON.stringify(state), 'utf8')
-  res.json({ ok: true })
+  try {
+    saveUserDesmos(req.user.id, name, state)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // GET /api/desmos/:name — load state
-router.get('/:name', (req, res) => {
-  const file = path.join(SAVES_DIR, safeName(req.params.name) + '.json')
-  if (!fs.existsSync(file)) return res.status(404).json({ error: 'Not found' })
-  res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
+router.get('/:name', requireAuth, (req, res) => {
+  try {
+    const state = getUserDesmosSave(req.user.id, req.params.name)
+    if (state === null) return res.status(404).json({ error: 'Not found' })
+    res.json(state)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 // DELETE /api/desmos/:name — delete save
-router.delete('/:name', (req, res) => {
-  const file = path.join(SAVES_DIR, safeName(req.params.name) + '.json')
-  if (!fs.existsSync(file)) return res.status(404).json({ error: 'Not found' })
-  fs.unlinkSync(file)
-  res.json({ ok: true })
+router.delete('/:name', requireAuth, (req, res) => {
+  try {
+    deleteUserDesmos(req.user.id, req.params.name)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
 })
 
 export default router

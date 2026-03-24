@@ -1,36 +1,23 @@
 import express from 'express'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { requireAuth } from '../middleware/auth.js'
+import { getUserData, setUserData } from '../db.js'
 
 const router = express.Router()
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = path.join(__dirname, '..', 'data')
-
-fs.mkdirSync(DATA_DIR, { recursive: true })
-
-function keyFile(key) {
-  // sanitize: only allow alphanumeric, dash, underscore
-  const safe = path.basename(key).replace(/[^a-zA-Z0-9_-]/g, '_')
-  return path.join(DATA_DIR, safe + '.json')
-}
 
 // GET /api/data/:key — returns stored value or null
-router.get('/:key', (req, res) => {
-  const file = keyFile(req.params.key)
-  if (!fs.existsSync(file)) return res.json(null)
+router.get('/:key', requireAuth, (req, res) => {
   try {
-    res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
-  } catch {
-    res.json(null)
+    const value = getUserData(req.user.id, req.params.key)
+    res.json(value)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
   }
 })
 
 // PUT /api/data/:key — store value (any JSON body)
-router.put('/:key', (req, res) => {
-  const file = keyFile(req.params.key)
+router.put('/:key', requireAuth, (req, res) => {
   try {
-    fs.writeFileSync(file, JSON.stringify(req.body), 'utf8')
+    setUserData(req.user.id, req.params.key, req.body)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, inject } from 'vue'
 
 const display   = ref('0')
 const exprLine  = ref('')
@@ -153,9 +153,11 @@ function mSub()    { tap('M-'); memory.value -= parseFloat(display.value) || 0; 
 // ── backend persistence ──
 let saveTimer = null
 
+const authFetch = inject('authFetch')
+
 async function saveHistory() {
   try {
-    await fetch('/api/data/calc-history', {
+    await authFetch('/api/data/calc-history', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(history.value),
@@ -209,7 +211,7 @@ function onKey(e) {
 onMounted(async () => {
   // Load history from backend
   try {
-    const res = await fetch('/api/data/calc-history')
+    const res = await authFetch('/api/data/calc-history')
     const data = await res.json()
     if (Array.isArray(data) && data.length) history.value = data
   } catch { /* ignore */ }

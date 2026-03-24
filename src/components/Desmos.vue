@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, inject } from 'vue'
 
 const iframeRef = ref(null)
 const calcReady = ref(false)
@@ -7,6 +7,8 @@ const saveName = ref('')
 const saves = ref([])
 const showSaves = ref(false)
 const saveStatus = ref('')   // '' | 'saving' | 'ok' | 'err'
+
+const authFetch = inject('authFetch')
 
 // ── poll for calc instance after iframe loads ──
 let pollTimer = null
@@ -46,7 +48,7 @@ function getCalc() {
 // ── saves API ──
 async function loadSavesList() {
   try {
-    const res = await fetch('/api/desmos')
+    const res = await authFetch('/api/desmos')
     saves.value = await res.json()
   } catch { /* ignore */ }
 }
@@ -58,7 +60,7 @@ async function saveGraph() {
   saveStatus.value = 'saving'
   try {
     const state = calc.getState()
-    const res = await fetch('/api/desmos', {
+    const res = await authFetch('/api/desmos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, state }),
@@ -75,7 +77,7 @@ async function loadGraph(name) {
   const calc = getCalc()
   if (!calc) return
   try {
-    const res = await fetch(`/api/desmos/${encodeURIComponent(name)}`)
+    const res = await authFetch(`/api/desmos/${encodeURIComponent(name)}`)
     const state = await res.json()
     calc.setState(state)
     saveName.value = name
@@ -85,7 +87,7 @@ async function loadGraph(name) {
 
 async function deleteGraph(name) {
   if (!confirm(`删除存档 "${name}"？`)) return
-  await fetch(`/api/desmos/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  await authFetch(`/api/desmos/${encodeURIComponent(name)}`, { method: 'DELETE' })
   await loadSavesList()
 }
 
