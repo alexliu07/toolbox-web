@@ -10,10 +10,21 @@ import PDFViewer            from './components/PDFViewer.vue'
 import FileViewer           from './components/FileViewer.vue'
 import YoudaoDictionary     from './components/YoudaoDictionary.vue'
 
-const API = 'http://localhost:8081/api'
+const API = '/api'
+
+// ── localStorage safe helpers ──
+function lsGet(key, fallback = '') {
+  try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, val) } catch {}
+}
+function lsRemove(key) {
+  try { localStorage.removeItem(key) } catch {}
+}
 
 // ── auth ──
-const authToken = ref(localStorage.getItem('auth_token') || '')
+const authToken = ref(lsGet('auth_token'))
 const currentUser = ref(null)   // { username, displayName }
 const authChecked = ref(false)  // whether we've verified token with server
 
@@ -40,7 +51,7 @@ async function checkAuth() {
       currentUser.value = await res.json()
     } else {
       authToken.value = ''
-      localStorage.removeItem('auth_token')
+      lsRemove('auth_token')
     }
   } catch {
     // server offline — keep token and show as logged in optimistically
@@ -74,7 +85,7 @@ async function handleAuthSubmit() {
       return
     }
     authToken.value = data.token
-    localStorage.setItem('auth_token', data.token)
+    lsSet('auth_token', data.token)
     currentUser.value = { username: data.username, displayName: data.displayName }
     authPassword.value = ''
   } catch (e) {
@@ -93,7 +104,7 @@ async function handleLogout() {
   } catch { /* ignore */ }
   authToken.value = ''
   currentUser.value = null
-  localStorage.removeItem('auth_token')
+  lsRemove('auth_token')
   authUsername.value = ''
   authPassword.value = ''
   authDisplayName.value = ''
