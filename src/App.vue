@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
+import AuthScreen           from './components/AuthScreen.vue'
 import PDFViewer            from './components/PDFViewer.vue'
 import FileViewer           from './components/FileViewer.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
+import { useAuth }          from './composables/useAuth.js'
 
 // 动态加载所有带 toolMeta 的工具组件
 const toolModules = import.meta.glob('./components/*.vue', { eager: true })
@@ -12,106 +14,11 @@ const allTools = Object.values(toolModules)
   .map(mod => ({ ...mod.toolMeta, component: markRaw(mod.default) }))
   .sort((a, b) => a.order - b.order)
 
-const API = '/api'
-
-// ── localStorage safe helpers ──
-function lsGet(key, fallback = '') {
-  try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
-}
-function lsSet(key, val) {
-  try { localStorage.setItem(key, val) } catch {}
-}
-function lsRemove(key) {
-  try { localStorage.removeItem(key) } catch {}
-}
-
 // ── auth ──
-const authToken = ref(lsGet('auth_token'))
-const currentUser = ref(null)   // { username, displayName }
-const authChecked = ref(false)  // whether we've verified token with server
-
-// Login form state
-const authMode = ref('login')   // 'login' | 'register'
-const authUsername = ref('')
-const authPassword = ref('')
-const authDisplayName = ref('')
-const authError = ref('')
-const authLoading = ref(false)
-
-const isLoggedIn = computed(() => !!currentUser.value)
-
-async function checkAuth() {
-  if (!authToken.value) {
-    authChecked.value = true
-    return
-  }
-  try {
-    const res = await fetch(`${API}/auth/me`, {
-      headers: { Authorization: `Bearer ${authToken.value}` }
-    })
-    if (res.ok) {
-      currentUser.value = await res.json()
-    } else {
-      authToken.value = ''
-      lsRemove('auth_token')
-    }
-  } catch {
-    // server offline — keep token and show as logged in optimistically
-    // or clear it; we'll clear to be safe
-  } finally {
-    authChecked.value = true
-  }
-}
-
-async function handleAuthSubmit() {
-  authError.value = ''
-  if (!authUsername.value.trim() || !authPassword.value) {
-    authError.value = '请填写用户名和密码'
-    return
-  }
-  authLoading.value = true
-  const endpoint = authMode.value === 'register' ? 'register' : 'login'
-  const body = { username: authUsername.value.trim(), password: authPassword.value }
-  if (authMode.value === 'register') {
-    body.displayName = authDisplayName.value.trim() || authUsername.value.trim()
-  }
-  try {
-    const res = await fetch(`${API}/auth/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      authError.value = data.error || '操作失败'
-      return
-    }
-    authToken.value = data.token
-    lsSet('auth_token', data.token)
-    currentUser.value = { username: data.username, displayName: data.displayName }
-    authPassword.value = ''
-  } catch (e) {
-    authError.value = '无法连接到服务器'
-  } finally {
-    authLoading.value = false
-  }
-}
-
-async function handleLogout() {
-  try {
-    await fetch(`${API}/auth/logout`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${authToken.value}` }
-    })
-  } catch { /* ignore */ }
-  authToken.value = ''
-  currentUser.value = null
-  lsRemove('auth_token')
-  authUsername.value = ''
-  authPassword.value = ''
-  authDisplayName.value = ''
-  authError.value = ''
-}
+const {
+  authToken, currentUser, isLoggedIn,
+  checkAuth, handleLogout, authFetch,
+} = useAuth()
 
 const now = ref(new Date())
 let timer = null
@@ -162,16 +69,6 @@ const {
 
 // Provide auth token and auth-aware fetch to child components
 provide('authToken', authToken)
-
-function authFetch(url, options = {}) {
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      Authorization: `Bearer ${authToken.value}`,
-    },
-  })
-}
 provide('authFetch', authFetch)
 
 // Provide functions to child components
@@ -197,68 +94,8 @@ onUnmounted(() => clearInterval(timer))
       <div class="orb orb-3"></div>
     </div>
 
-    <!-- 登录/注册界面 (覆盖全屏) -->
-    <Transition name="auth-screen">
-      <div v-if="authChecked && !isLoggedIn" class="auth-overlay">
-        <div class="auth-card">
-          <div class="auth-logo">🧰</div>
-          <h1 class="auth-title">Toolbox</h1>
-          <p class="auth-subtitle">{{ authMode === 'login' ? '登录以继续' : '创建新账户' }}</p>
-
-          <form class="auth-form" @submit.prevent="handleAuthSubmit">
-            <div class="auth-field">
-              <label>用户名</label>
-              <input
-                v-model="authUsername"
-                type="text"
-                placeholder="输入用户名"
-                autocomplete="username"
-                :disabled="authLoading"
-              />
-            </div>
-
-            <div v-if="authMode === 'register'" class="auth-field">
-              <label>显示名称 <span class="optional">(可选)</span></label>
-              <input
-                v-model="authDisplayName"
-                type="text"
-                placeholder="留空则使用用户名"
-                :disabled="authLoading"
-              />
-            </div>
-
-            <div class="auth-field">
-              <label>密码</label>
-              <input
-                v-model="authPassword"
-                type="password"
-                placeholder="输入密码"
-                autocomplete="current-password"
-                :disabled="authLoading"
-              />
-            </div>
-
-            <p v-if="authError" class="auth-error">{{ authError }}</p>
-
-            <button type="submit" class="auth-btn" :disabled="authLoading">
-              <span v-if="authLoading">处理中…</span>
-              <span v-else>{{ authMode === 'login' ? '登 录' : '注 册' }}</span>
-            </button>
-          </form>
-
-          <p class="auth-switch">
-            <span v-if="authMode === 'login'">
-              还没有账户？
-              <button class="auth-link" @click="authMode = 'register'; authError = ''">注册</button>
-            </span>
-            <span v-else>
-              已有账户？
-              <button class="auth-link" @click="authMode = 'login'; authError = ''">登录</button>
-            </span>
-          </p>
-        </div>
-      </div>
-    </Transition>
+    <!-- 登录/注册界面 -->
+    <AuthScreen />
 
     <!-- 任务栏 -->
     <Transition name="taskbar-bar">
@@ -391,177 +228,6 @@ onUnmounted(() => clearInterval(timer))
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-/* ── 登录/注册界面 ── */
-.auth-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(8, 12, 26, 0.7);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.auth-card {
-  background: rgba(255, 255, 255, 0.07);
-  backdrop-filter: blur(32px);
-  -webkit-backdrop-filter: blur(32px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 28px;
-  padding: 48px 48px 40px;
-  width: 380px;
-  max-width: 90vw;
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  text-align: center;
-}
-
-.auth-logo {
-  font-size: 52px;
-  margin-bottom: 8px;
-  line-height: 1;
-  filter: drop-shadow(0 4px 12px rgba(99, 102, 241, 0.5));
-}
-
-.auth-title {
-  font-size: 28px;
-  font-weight: 600;
-  color: #fff;
-  margin: 0 0 6px;
-  letter-spacing: 1px;
-}
-
-.auth-subtitle {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.5);
-  margin: 0 0 28px;
-}
-
-.auth-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  text-align: left;
-}
-
-.auth-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.auth-field label {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-  letter-spacing: 0.5px;
-  font-weight: 500;
-}
-
-.auth-field .optional {
-  font-weight: 400;
-  opacity: 0.6;
-}
-
-.auth-field input {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  padding: 10px 14px;
-  color: #fff;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s, background 0.2s;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.auth-field input::placeholder {
-  color: rgba(255, 255, 255, 0.3);
-}
-
-.auth-field input:focus {
-  border-color: rgba(99, 102, 241, 0.7);
-  background: rgba(99, 102, 241, 0.08);
-}
-
-.auth-field input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.auth-error {
-  font-size: 13px;
-  color: #f87171;
-  margin: 0;
-  padding: 8px 12px;
-  background: rgba(248, 113, 113, 0.1);
-  border-radius: 8px;
-  border: 1px solid rgba(248, 113, 113, 0.25);
-}
-
-.auth-btn {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border: none;
-  border-radius: 10px;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 12px;
-  cursor: pointer;
-  transition: opacity 0.2s, transform 0.15s;
-  letter-spacing: 2px;
-  margin-top: 4px;
-}
-
-.auth-btn:hover:not(:disabled) {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.auth-btn:active:not(:disabled) {
-  transform: translateY(0);
-  opacity: 0.85;
-}
-
-.auth-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.auth-switch {
-  margin: 20px 0 0;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.auth-link {
-  background: none;
-  border: none;
-  color: #818cf8;
-  font-size: 13px;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.auth-link:hover {
-  color: #a5b4fc;
-}
-
-/* auth screen transition */
-.auth-screen-enter-active,
-.auth-screen-leave-active {
-  transition: opacity 0.35s ease;
-}
-.auth-screen-enter-from,
-.auth-screen-leave-to {
-  opacity: 0;
 }
 
 /* ── 用户信息栏 ── */
