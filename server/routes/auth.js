@@ -26,7 +26,7 @@ router.post('/register', async (req, res) => {
   if (password.length < 6) {
     return res.status(400).json({ error: '密码至少需要 6 位' })
   }
-  if (!/^[a-zA-Z0-9_\-\.]+$/.test(username)) {
+  if (!/^[a-zA-Z0-9_\-.]+$/.test(username)) {
     return res.status(400).json({ error: '用户名只能包含字母、数字、下划线、连字符和点' })
   }
 

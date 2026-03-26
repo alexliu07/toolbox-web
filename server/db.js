@@ -117,14 +117,6 @@ export function saveDatabase() {
   fs.writeFileSync(DB_PATH, buffer)
 }
 
-/**
- * Get database instance
- */
-export function getDb() {
-  if (!db) throw new Error('Database not initialized. Call initDatabase() first.')
-  return db
-}
-
 // ── User operations ──
 
 export function createUser(username, passwordHash, displayName) {
@@ -141,8 +133,7 @@ export function getUserByUsername(username) {
   stmt.bind([username])
   let user = null
   if (stmt.step()) {
-    const row = stmt.getAsObject()
-    user = row
+    user = stmt.getAsObject()
   }
   stmt.free()
   return user
