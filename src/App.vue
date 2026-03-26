@@ -1,14 +1,16 @@
 <script setup>
-import { ref, computed, markRaw, onMounted, onUnmounted, provide, nextTick } from 'vue'
+import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
-import DinoGame             from './components/DinoGame.vue'
-import ScientificCalculator from './components/ScientificCalculator.vue'
-import Desmos               from './components/Desmos.vue'
-import DrawingBoard         from './components/DrawingBoard.vue'
-import CloudFiles           from './components/CloudFiles.vue'
 import PDFViewer            from './components/PDFViewer.vue'
 import FileViewer           from './components/FileViewer.vue'
-import YoudaoDictionary     from './components/YoudaoDictionary.vue'
+import { useWindowManager } from './composables/useWindowManager.js'
+
+// 动态加载所有带 toolMeta 的工具组件
+const toolModules = import.meta.glob('./components/*.vue', { eager: true })
+const allTools = Object.values(toolModules)
+  .filter(mod => mod.toolMeta)
+  .map(mod => ({ ...mod.toolMeta, component: markRaw(mod.default) }))
+  .sort((a, b) => a.order - b.order)
 
 const API = '/api'
 
@@ -127,74 +129,6 @@ const dateStr = computed(() => {
 
 // ── tools registry ──
 const toolConfig = ref({})
-const allTools = [
-  {
-    id: 'dino',
-    name: '小恐龙',
-    icon: '🦕',
-    gradient: 'linear-gradient(135deg,#3a8c5c,#1d5e3a)',
-    component: markRaw(DinoGame),
-    windowTitle: 'Chrome Dino',
-    windowIcon: '🦕',
-    width: 800,
-    height: 380,
-  },
-  {
-    id: 'calculator',
-    name: '科学计算器',
-    icon: '🧮',
-    gradient: 'linear-gradient(135deg,#4f46e5,#7c3aed)',
-    component: markRaw(ScientificCalculator),
-    windowTitle: '科学计算器',
-    windowIcon: '🧮',
-    width: 520,
-    height: 620,
-  },
-  {
-    id: 'desmos',
-    name: 'Desmos',
-    icon: '📈',
-    gradient: 'linear-gradient(135deg,#0a7ea4,#05c3de)',
-    component: markRaw(Desmos),
-    windowTitle: 'Desmos 图形计算器',
-    windowIcon: '📈',
-    width: 1000,
-    height: 640,
-  },
-  {
-    id: 'drawing',
-    name: '画板',
-    icon: '🎨',
-    gradient: 'linear-gradient(135deg,#d97706,#dc2626)',
-    component: markRaw(DrawingBoard),
-    windowTitle: '画板',
-    windowIcon: '🎨',
-    width: 900,
-    height: 620,
-  },
-  {
-    id: 'cloudfiles',
-    name: '云文件',
-    icon: '☁️',
-    gradient: 'linear-gradient(135deg,#0f4c81,#1a8fe3)',
-    component: markRaw(CloudFiles),
-    windowTitle: '云文件管理',
-    windowIcon: '☁️',
-    width: 900,
-    height: 600,
-  },
-  {
-    id: 'youdao',
-    name: '有道词典',
-    icon: '📚',
-    gradient: 'linear-gradient(135deg,#e11d48,#be123c)',
-    component: markRaw(YoudaoDictionary),
-    windowTitle: '有道词典',
-    windowIcon: '📚',
-    width: 600,
-    height: 520,
-  },
-]
 
 // 根据配置过滤启用的工具
 const tools = computed(() => {
@@ -214,108 +148,17 @@ async function loadConfig() {
   }
 }
 
-// ── open windows ──
-const openWindows = ref([])      // array of { id, toolId, tool, zIndex, minimized }
-const pdfWindows = ref([])       // array of { id, pdfUrl, title, zIndex, minimized }
-const fileWindows = ref([])      // array of { id, fileUrl, fileName, mimeType, zIndex, minimized }
-let winSeq = 0
-let pdfWinSeq = 0
-let fileWinSeq = 0
-let zCounter = 1000
-
-function openTool(tool) {
-  // only one instance per tool
-  if (openWindows.value.find(w => w.toolId === tool.id)) return
-  openWindows.value.push({ id: ++winSeq, toolId: tool.id, tool, zIndex: ++zCounter, minimized: false })
-}
-
-function closeWindow(winId) {
-  openWindows.value = openWindows.value.filter(w => w.id !== winId)
-}
-
-function closePDFWindow(winId) {
-  pdfWindows.value = pdfWindows.value.filter(w => w.id !== winId)
-}
-
-function closeFileWindow(winId) {
-  fileWindows.value = fileWindows.value.filter(w => w.id !== winId)
-}
-
-function bringToFront(winId) {
-  const win = openWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.zIndex = ++zCounter
-    win.minimized = false
-  }
-}
-
-function bringPDFToFront(winId) {
-  const win = pdfWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.zIndex = ++zCounter
-    win.minimized = false
-  }
-}
-
-function bringFileToFront(winId) {
-  const win = fileWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.zIndex = ++zCounter
-    win.minimized = false
-  }
-}
-
-// Open PDF in new window
-function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
-  pdfWindows.value.push({
-    id: ++pdfWinSeq,
-    pdfUrl,
-    title: title.length > 40 ? title.slice(0, 37) + '...' : title,
-    zIndex: ++zCounter,
-    minimized: false
-  })
-}
-
-// Open file in new window (image, text, video, audio)
-function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
-  // Determine icon based on mime type
-  let icon = '📄'
-  if (mimeType?.startsWith('image/')) icon = '🖼'
-  else if (mimeType?.startsWith('video/')) icon = '🎬'
-  else if (mimeType?.startsWith('audio/')) icon = '🎵'
-  else if (mimeType?.startsWith('text/')) icon = '📝'
-
-  fileWindows.value.push({
-    id: ++fileWinSeq,
-    fileUrl,
-    fileName: fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName,
-    mimeType,
-    icon,
-    fileList,
-    currentIndex,
-    zIndex: ++zCounter,
-    minimized: false
-  })
-}
-
-// Navigate to different file in file viewer
-function navigateFileViewer(winId, newIndex) {
-  const win = fileWindows.value.find(w => w.id === winId)
-  if (!win || !win.fileList || newIndex < 0 || newIndex >= win.fileList.length) return
-
-  const newFile = win.fileList[newIndex]
-  win.currentIndex = newIndex
-  win.fileUrl = newFile.url
-  win.fileName = newFile.name.length > 40 ? newFile.name.slice(0, 37) + '...' : newFile.name
-  win.mimeType = newFile.mime
-
-  // Update icon
-  if (newFile.mime?.startsWith('image/')) win.icon = '🖼'
-  else if (newFile.mime?.startsWith('video/')) win.icon = '🎬'
-  else if (newFile.mime?.startsWith('audio/')) win.icon = '🎵'
-  else if (newFile.mime?.startsWith('text/')) win.icon = '📝'
-  else win.icon = '📄'
-}
+// ── window manager ──
+const {
+  openWindows, pdfWindows, fileWindows,
+  openTool, closeWindow, closePDFWindow, closeFileWindow,
+  bringToFront, bringPDFToFront, bringFileToFront,
+  minimizeToolWindow, minimizePDFWindow, minimizeFileWindow,
+  openPDFViewer, openFileViewer, navigateFileViewer,
+  setTaskbarButtonRef, getTaskbarButtonRect,
+  allOpenWindows, focusedWindowId, hasOpenWindows,
+  handleTaskbarClick,
+} = useWindowManager()
 
 // Provide auth token and auth-aware fetch to child components
 provide('authToken', authToken)
@@ -335,149 +178,7 @@ provide('authFetch', authFetch)
 provide('openPDFViewer', openPDFViewer)
 provide('openFileViewer', openFileViewer)
 provide('navigateFileViewer', navigateFileViewer)
-
-// ── taskbar ──
-// 存储任务栏按钮元素引用
-const taskbarButtonRefs = ref(new Map())
-
-function setTaskbarButtonRef(el, winId) {
-  if (el) {
-    taskbarButtonRefs.value.set(winId, el)
-  }
-}
-
-function getTaskbarButtonRect(winId) {
-  const el = taskbarButtonRefs.value.get(winId)
-  if (el) {
-    const rect = el.getBoundingClientRect()
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-      width: rect.width,
-      height: rect.height
-    }
-  }
-  return null
-}
-
-// 提供给子组件使用
 provide('getTaskbarButtonRect', getTaskbarButtonRect)
-
-// 按打开顺序排列，不随焦点变化
-const allOpenWindows = computed(() => {
-  const tools = openWindows.value.map(w => ({
-    id: `tool-${w.id}`,
-    winId: w.id,
-    type: 'tool',
-    title: w.tool.windowTitle,
-    icon: w.tool.windowIcon,
-    zIndex: w.zIndex,
-    minimized: w.minimized,
-    bringToFront: () => bringToFront(w.id),
-    minimize: () => minimizeToolWindow(w.id),
-    restore: () => restoreToolWindow(w.id)
-  }))
-  const pdfs = pdfWindows.value.map(w => ({
-    id: `pdf-${w.id}`,
-    winId: w.id,
-    type: 'pdf',
-    title: w.title,
-    icon: '📄',
-    zIndex: w.zIndex,
-    minimized: w.minimized,
-    bringToFront: () => bringPDFToFront(w.id),
-    minimize: () => minimizePDFWindow(w.id),
-    restore: () => restorePDFWindow(w.id)
-  }))
-  const files = fileWindows.value.map(w => ({
-    id: `file-${w.id}`,
-    winId: w.id,
-    type: 'file',
-    title: w.fileName,
-    icon: w.icon,
-    zIndex: w.zIndex,
-    minimized: w.minimized,
-    bringToFront: () => bringFileToFront(w.id),
-    minimize: () => minimizeFileWindow(w.id),
-    restore: () => restoreFileWindow(w.id)
-  }))
-  // 保持打开顺序，不按 zIndex 排序
-  return [...tools, ...pdfs, ...files]
-})
-
-// 当前焦点窗口（zIndex 最高的）
-const focusedWindowId = computed(() => {
-  const all = [...openWindows.value, ...pdfWindows.value, ...fileWindows.value]
-  if (all.length === 0) return null
-  const maxZ = Math.max(...all.map(w => w.zIndex))
-  const focused = all.find(w => w.zIndex === maxZ)
-  if (!focused) return null
-  if (openWindows.value.includes(focused)) return `tool-${focused.id}`
-  if (pdfWindows.value.includes(focused)) return `pdf-${focused.id}`
-  if (fileWindows.value.includes(focused)) return `file-${focused.id}`
-  return null
-})
-
-const hasOpenWindows = computed(() => allOpenWindows.value.length > 0)
-
-function minimizeToolWindow(winId) {
-  const win = openWindows.value.find(w => w.id === winId)
-  if (win) win.minimized = true
-}
-
-function minimizePDFWindow(winId) {
-  const win = pdfWindows.value.find(w => w.id === winId)
-  if (win) win.minimized = true
-}
-
-function minimizeFileWindow(winId) {
-  const win = fileWindows.value.find(w => w.id === winId)
-  if (win) win.minimized = true
-}
-
-function restoreToolWindow(winId) {
-  const win = openWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.minimized = false
-    bringToFront(winId)
-  }
-}
-
-function restorePDFWindow(winId) {
-  const win = pdfWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.minimized = false
-    bringPDFToFront(winId)
-  }
-}
-
-function restoreFileWindow(winId) {
-  const win = fileWindows.value.find(w => w.id === winId)
-  if (win) {
-    win.minimized = false
-    bringFileToFront(winId)
-  }
-}
-
-// 判断窗口是否处于焦点（zIndex 最高且未最小化）
-function isWindowFocused(win) {
-  return focusedWindowId.value === win.id && !win.minimized
-}
-
-function handleTaskbarClick(win) {
-  // 如果窗口已最小化，则还原
-  if (win.minimized) {
-    win.restore()
-    return
-  }
-  // 如果窗口已经是焦点窗口，则最小化
-  if (isWindowFocused(win)) {
-    win.minimize()
-  } else {
-    // 否则聚焦窗口
-    win.bringToFront()
-  }
-}
 
 onMounted(() => {
   timer = setInterval(() => { now.value = new Date() }, 1000)
@@ -560,7 +261,8 @@ onUnmounted(() => clearInterval(timer))
     </Transition>
 
     <!-- 任务栏 -->
-    <div class="taskbar" v-show="hasOpenWindows">
+    <Transition name="taskbar-bar">
+    <div class="taskbar" v-if="hasOpenWindows">
       <TransitionGroup name="taskbar" tag="div" class="taskbar-items">
         <button
           v-for="win in allOpenWindows"
@@ -576,6 +278,7 @@ onUnmounted(() => clearInterval(timer))
         </button>
       </TransitionGroup>
     </div>
+    </Transition>
 
     <main class="content">
       <!-- 时钟区域 -->
@@ -1131,6 +834,16 @@ onUnmounted(() => clearInterval(timer))
 }
 
 /* ── 任务栏 ── */
+.taskbar-bar-enter-active,
+.taskbar-bar-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.taskbar-bar-enter-from,
+.taskbar-bar-leave-to {
+  opacity: 0;
+  transform: translateY(-100%);
+}
+
 .taskbar {
   position: fixed;
   top: 0;
