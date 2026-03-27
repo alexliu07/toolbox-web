@@ -191,10 +191,31 @@ function onTitleMouseDown(e) {
   window.addEventListener('mouseup',   onDragUp)
 }
 
+function onTitleTouchStart(e) {
+  if (maximized.value) return
+  if (isAnimating.value || isHidden.value) return
+  if (e.touches.length !== 1) return
+  const t = e.touches[0]
+  dragging = true
+  interacting.value = true
+  dragOX = t.clientX - x.value
+  dragOY = t.clientY - y.value
+  window.addEventListener('touchmove', onDragTouchMove, { passive: false })
+  window.addEventListener('touchend',  onDragTouchUp)
+}
+
 function onDragMove(e) {
   if (!dragging) return
   x.value = Math.max(0, Math.min(window.innerWidth  - w.value, e.clientX - dragOX))
   y.value = Math.max(0, Math.min(window.innerHeight - 40,      e.clientY - dragOY))
+}
+
+function onDragTouchMove(e) {
+  if (!dragging || e.touches.length !== 1) return
+  e.preventDefault()
+  const t = e.touches[0]
+  x.value = Math.max(0, Math.min(window.innerWidth  - w.value, t.clientX - dragOX))
+  y.value = Math.max(0, Math.min(window.innerHeight - 40,      t.clientY - dragOY))
 }
 
 function onDragUp() {
@@ -202,6 +223,13 @@ function onDragUp() {
   interacting.value = false
   window.removeEventListener('mousemove', onDragMove)
   window.removeEventListener('mouseup',   onDragUp)
+}
+
+function onDragTouchUp() {
+  dragging = false
+  interacting.value = false
+  window.removeEventListener('touchmove', onDragTouchMove)
+  window.removeEventListener('touchend',  onDragTouchUp)
 }
 
 // ── resize ──
@@ -229,11 +257,42 @@ function onResizeMouseDown(e, dir) {
   window.addEventListener('mouseup',   onResizeUp)
 }
 
+function onResizeTouchStart(e, dir) {
+  if (maximized.value) return
+  if (isAnimating.value || isHidden.value) return
+  if (e.touches.length !== 1) return
+  const t = e.touches[0]
+  resizing   = true
+  interacting.value = true
+  resizeDir  = dir
+  resizeOX   = t.clientX
+  resizeOY   = t.clientY
+  resizeX0   = x.value
+  resizeY0   = y.value
+  resizeW0   = w.value
+  resizeH0   = h.value
+  e.preventDefault()
+  window.addEventListener('touchmove', onResizeTouchMove, { passive: false })
+  window.addEventListener('touchend',  onResizeTouchUp)
+}
+
 function onResizeMove(e) {
   if (!resizing) return
   const dx = e.clientX - resizeOX
   const dy = e.clientY - resizeOY
+  applyResize(dx, dy)
+}
 
+function onResizeTouchMove(e) {
+  if (!resizing || e.touches.length !== 1) return
+  e.preventDefault()
+  const t = e.touches[0]
+  const dx = t.clientX - resizeOX
+  const dy = t.clientY - resizeOY
+  applyResize(dx, dy)
+}
+
+function applyResize(dx, dy) {
   if (resizeDir.includes('e')) w.value = Math.max(props.minWidth,  resizeW0 + dx)
   if (resizeDir.includes('s')) h.value = Math.max(props.minHeight, resizeH0 + dy)
   if (resizeDir.includes('w')) {
@@ -253,6 +312,13 @@ function onResizeUp() {
   interacting.value = false
   window.removeEventListener('mousemove', onResizeMove)
   window.removeEventListener('mouseup',   onResizeUp)
+}
+
+function onResizeTouchUp() {
+  resizing = false
+  interacting.value = false
+  window.removeEventListener('touchmove', onResizeTouchMove)
+  window.removeEventListener('touchend',  onResizeTouchUp)
 }
 
 // ── maximize / restore ──
@@ -296,8 +362,12 @@ const windowStyle = computed(() => ({
 onUnmounted(() => {
   window.removeEventListener('mousemove', onDragMove)
   window.removeEventListener('mouseup',   onDragUp)
+  window.removeEventListener('touchmove', onDragTouchMove)
+  window.removeEventListener('touchend',  onDragTouchUp)
   window.removeEventListener('mousemove', onResizeMove)
   window.removeEventListener('mouseup',   onResizeUp)
+  window.removeEventListener('touchmove', onResizeTouchMove)
+  window.removeEventListener('touchend',  onResizeTouchUp)
 })
 </script>
 
@@ -310,20 +380,21 @@ onUnmounted(() => {
   >
     <!-- resize handles (8 directions) -->
     <template v-if="!maximized && !isAnimating && !isHidden">
-      <div class="rh rh-n"  @mousedown.stop="onResizeMouseDown($event,'n')"/>
-      <div class="rh rh-s"  @mousedown.stop="onResizeMouseDown($event,'s')"/>
-      <div class="rh rh-e"  @mousedown.stop="onResizeMouseDown($event,'e')"/>
-      <div class="rh rh-w"  @mousedown.stop="onResizeMouseDown($event,'w')"/>
-      <div class="rh rh-ne" @mousedown.stop="onResizeMouseDown($event,'ne')"/>
-      <div class="rh rh-nw" @mousedown.stop="onResizeMouseDown($event,'nw')"/>
-      <div class="rh rh-se" @mousedown.stop="onResizeMouseDown($event,'se')"/>
-      <div class="rh rh-sw" @mousedown.stop="onResizeMouseDown($event,'sw')"/>
+      <div class="rh rh-n"  @mousedown.stop="onResizeMouseDown($event,'n')"  @touchstart.stop.passive="onResizeTouchStart($event,'n')"/>
+      <div class="rh rh-s"  @mousedown.stop="onResizeMouseDown($event,'s')"  @touchstart.stop.passive="onResizeTouchStart($event,'s')"/>
+      <div class="rh rh-e"  @mousedown.stop="onResizeMouseDown($event,'e')"  @touchstart.stop.passive="onResizeTouchStart($event,'e')"/>
+      <div class="rh rh-w"  @mousedown.stop="onResizeMouseDown($event,'w')"  @touchstart.stop.passive="onResizeTouchStart($event,'w')"/>
+      <div class="rh rh-ne" @mousedown.stop="onResizeMouseDown($event,'ne')" @touchstart.stop.passive="onResizeTouchStart($event,'ne')"/>
+      <div class="rh rh-nw" @mousedown.stop="onResizeMouseDown($event,'nw')" @touchstart.stop.passive="onResizeTouchStart($event,'nw')"/>
+      <div class="rh rh-se" @mousedown.stop="onResizeMouseDown($event,'se')" @touchstart.stop.passive="onResizeTouchStart($event,'se')"/>
+      <div class="rh rh-sw" @mousedown.stop="onResizeMouseDown($event,'sw')" @touchstart.stop.passive="onResizeTouchStart($event,'sw')"/>
     </template>
 
     <!-- title bar -->
     <div
       class="title-bar"
       @mousedown="onTitleMouseDown"
+      @touchstart.passive="onTitleTouchStart"
       @dblclick="onTitleDblClick"
     >
       <div class="title-left">

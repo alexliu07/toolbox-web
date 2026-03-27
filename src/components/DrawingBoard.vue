@@ -193,6 +193,11 @@ function screenXY(e) {
   return { x: e.clientX - r.left, y: e.clientY - r.top }
 }
 
+function screenXYTouch(t) {
+  const r = canvasEl.value.getBoundingClientRect()
+  return { x: t.clientX - r.left, y: t.clientY - r.top }
+}
+
 function computeBounds() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
   for (const s of strokes) {
@@ -403,6 +408,133 @@ function onLeave() {
   mouseCanvas = null
   if (hoveredStrokeId !== null) { hoveredStrokeId = null; queueRender() }
   else if (tool.value === 'eraser') queueRender()
+}
+
+// ──────────────────────────────────────────────
+// TOUCH EVENTS
+// ──────────────────────────────────────────────
+function onTouchStart(e) {
+  if (e.touches.length !== 1) return
+  e.preventDefault()
+  const t = e.touches[0]
+  const cp = screenXYTouch(t)
+  const wp = toWorld(cp.x, cp.y)
+  mouseCanvas = cp
+  isDown = true
+
+  if (tool.value === 'pan') {
+    isPanning = true
+    panOrig = { cx: t.clientX, cy: t.clientY, vx: vpX, vy: vpY }
+    return
+  }
+
+  if (tool.value === 'lasso') {
+    if (selection.size > 0) {
+      const hi = hitHandle(wp.x, wp.y)
+      if (hi >= 0) {
+        const b = computeBounds()
+        const hs = cornerHandles(b, 10)
+        const piv = hs[[3, 2, 1, 0][hi]]
+        const origDist = Math.hypot(wp.x - piv.x, wp.y - piv.y)
+        isScaling = true
+        scaleData = {
+          pivX: piv.x, pivY: piv.y, origDist,
+          snaps: strokes.filter(s => selection.has(s.id)).map(s => ({
+            id: s.id, w: s.width, pts: s.points.map(p => ({ ...p }))
+          }))
+        }
+        return
+      }
+      if (inSelBounds(wp.x, wp.y)) {
+        isDraggingSel = true
+        dragOrig = { wx: wp.x, wy: wp.y }
+        dragSnaps = strokes.filter(s => selection.has(s.id)).map(s => ({
+          id: s.id, pts: s.points.map(p => ({ ...p }))
+        }))
+        return
+      }
+    }
+    selection = new Set(); hasSelection.value = false
+    lassoPath = [{ x: wp.x, y: wp.y }]
+    isLassoing = true
+    return
+  }
+
+  if (tool.value === 'pen') {
+    isDrawing = true
+    liveStroke = { id: ++seq, points: [{ ...wp }], color: penColor.value, width: +penWidth.value }
+    return
+  }
+
+  if (tool.value === 'eraser') {
+    if (eraserMode.value === 'stroke') {
+      isStrokeErasing = true
+      const id = nearestStroke(wp.x, wp.y, +eraserSize.value / 2)
+      if (id !== null) { strokes = strokes.filter(s => s.id !== id); queueRender() }
+    } else {
+      isDrawing = true
+      liveStroke = { id: ++seq, points: [{ ...wp }], color: '#ffffff', width: +eraserSize.value, eraser: true }
+    }
+  }
+}
+
+function onTouchMove(e) {
+  if (e.touches.length !== 1) return
+  e.preventDefault()
+  const t = e.touches[0]
+  const cp = screenXYTouch(t)
+  const wp = toWorld(cp.x, cp.y)
+  mouseCanvas = cp
+
+  if (isPanning) {
+    vpX = panOrig.vx + t.clientX - panOrig.cx
+    vpY = panOrig.vy + t.clientY - panOrig.cy
+    queueRender(); return
+  }
+
+  if (tool.value === 'lasso') {
+    if (isScaling && scaleData) {
+      const { pivX, pivY, origDist, snaps } = scaleData
+      if (origDist < 0.01) return
+      const sc = Math.max(0.05, Math.hypot(wp.x - pivX, wp.y - pivY) / origDist)
+      for (const snap of snaps) {
+        const s = strokes.find(x => x.id === snap.id); if (!s) continue
+        s.points = snap.pts.map(p => ({ x: pivX + (p.x - pivX) * sc, y: pivY + (p.y - pivY) * sc }))
+        s.width  = Math.max(0.5, snap.w * sc)
+      }
+      queueRender(); return
+    }
+    if (isDraggingSel) {
+      const dx = wp.x - dragOrig.wx, dy = wp.y - dragOrig.wy
+      for (const snap of dragSnaps) {
+        const s = strokes.find(x => x.id === snap.id); if (!s) continue
+        s.points = snap.pts.map(p => ({ x: p.x + dx, y: p.y + dy }))
+      }
+      queueRender(); return
+    }
+    if (isLassoing) { lassoPath.push({ x: wp.x, y: wp.y }); queueRender() }
+    return
+  }
+
+  if (tool.value === 'eraser' && eraserMode.value === 'stroke') {
+    const id = nearestStroke(wp.x, wp.y, +eraserSize.value / 2)
+    if (id !== hoveredStrokeId) { hoveredStrokeId = id; queueRender() }
+    if (isStrokeErasing && id !== null) {
+      strokes = strokes.filter(s => s.id !== id)
+      hoveredStrokeId = null
+      queueRender()
+    }
+    return
+  }
+
+  if (!isDown || !liveStroke) return
+  liveStroke.points.push({ ...wp })
+  queueRender()
+}
+
+function onTouchEnd(e) {
+  e.preventDefault()
+  onUp()
 }
 
 // ──────────────────────────────────────────────
@@ -659,6 +791,9 @@ onUnmounted(() => {
         @mousedown="onDown"
         @mousemove="onMove"
         @mouseleave="onLeave"
+        @touchstart.prevent="onTouchStart"
+        @touchmove.prevent="onTouchMove"
+        @touchend.prevent="onTouchEnd"
       />
     </div>
 
