@@ -159,8 +159,7 @@ onUnmounted(() => { clearInterval(pollTimer) })
       ref="iframeRef"
       src="/desmos/index.html"
       class="desmos-frame"
-      frameborder="0"
-      @load="onIframeLoad"
+@load="onIframeLoad"
     />
   </div>
 </template>

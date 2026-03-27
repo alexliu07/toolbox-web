@@ -328,11 +328,6 @@ watch(() => props.pdfUrl, () => { loadPDF() })
   height: 16px;
 }
 
-.pdf-zoom-reset {
-  min-width: 50px;
-  font-variant-numeric: tabular-nums;
-}
-
 .pdf-page-info {
   display: flex;
   align-items: center;

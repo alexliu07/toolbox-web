@@ -468,14 +468,6 @@ onUnmounted(() => {
   height: 16px;
 }
 
-.fv-btn.primary {
-  background: #1a8fe3;
-  border-color: #1a8fe3;
-}
-
-.fv-btn.primary:hover {
-  background: #1479c9;
-}
 
 /* Content */
 .fv-content {

@@ -977,39 +977,6 @@ onErrorCaptured((e) => {
   min-height: 0;
 }
 
-.cf-preview-loading {
-  color: #8b949e;
-}
-
-.cf-preview-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: 4px;
-}
-
-.cf-preview-text {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #e6edf3;
-  background: #0d1117;
-  padding: 12px;
-  border-radius: 6px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  align-self: stretch;
-}
-
-.cf-preview-video, .cf-preview-audio {
-  max-width: 100%;
-  max-height: 100%;
-}
-
 .cf-preview-unsupported {
   display: flex;
   flex-direction: column;

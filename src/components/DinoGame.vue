@@ -73,9 +73,7 @@ onUnmounted(() => {
     ref="iframeRef"
     src="/dino/index.html"
     class="dino-frame"
-    frameborder="0"
-    scrolling="no"
-    allowtransparency="true"
+
     @load="onIframeLoad"
   />
 </template>

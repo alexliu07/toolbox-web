@@ -625,7 +625,7 @@ onUnmounted(() => {
           <path d="M3 7v10h14V7M1 4h18v3H1V4z"/><path d="M7 10h6"/>
         </svg>
         <span>存档</span>
-        <span class="badge" v-if="saves.length"">{{ saves.length }}</span>
+        <span class="badge" v-if="saves.length">{{ saves.length }}</span>
       </button>
 
       <div style="flex:1"/>

@@ -257,13 +257,4 @@ async function handleAuthSubmit() {
 .auth-link:hover {
   color: #a5b4fc;
 }
-
-.auth-screen-enter-active,
-.auth-screen-leave-active {
-  transition: opacity 0.35s ease;
-}
-.auth-screen-enter-from,
-.auth-screen-leave-to {
-  opacity: 0;
-}
 </style>
