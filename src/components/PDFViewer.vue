@@ -52,12 +52,21 @@ async function loadPDF() {
 }
 
 // Render current page
-async function renderPage() {
+// preserveScroll: true = keep proportional scroll position (zoom), false = reset to top (page change)
+async function renderPage(preserveScroll = false) {
   if (!pdfDoc.value || !canvasRef.value) return
 
   if (renderTask.value) {
     renderTask.value.cancel()
     renderTask.value = null
+  }
+
+  // Snapshot scroll ratio before resize
+  let scrollRatioX = 0, scrollRatioY = 0
+  if (preserveScroll && contentRef.value) {
+    const el = contentRef.value
+    scrollRatioX = el.scrollWidth  > el.clientWidth  ? el.scrollLeft / (el.scrollWidth  - el.clientWidth)  : 0
+    scrollRatioY = el.scrollHeight > el.clientHeight ? el.scrollTop  / (el.scrollHeight - el.clientHeight) : 0
   }
 
   try {
@@ -91,8 +100,18 @@ async function renderPage() {
     renderTask.value = page.render(renderContext)
     await renderTask.value.promise
     renderTask.value = null
-    // Reset scroll to top on new page
-    if (contentRef.value) contentRef.value.scrollTop = 0
+
+    if (contentRef.value) {
+      if (preserveScroll) {
+        // Restore proportional scroll position after zoom
+        await nextTick()
+        const el = contentRef.value
+        el.scrollLeft = scrollRatioX * (el.scrollWidth  - el.clientWidth)
+        el.scrollTop  = scrollRatioY * (el.scrollHeight - el.clientHeight)
+      } else {
+        contentRef.value.scrollTop = 0
+      }
+    }
   } catch (e) {
     if (e.name !== 'RenderingCancelledException') {
       console.error('PDF rendering error:', e)
@@ -148,17 +167,17 @@ function scrollRight() {
 // Zoom
 function zoomIn() {
   userScale.value = Math.min(userScale.value + 0.2, 3)
-  renderPage()
+  renderPage(true)
 }
 
 function zoomOut() {
   userScale.value = Math.max(userScale.value - 0.2, 0.3)
-  renderPage()
+  renderPage(true)
 }
 
 function resetZoom() {
   userScale.value = 1
-  renderPage()
+  renderPage(true)
 }
 
 // Handle window resize

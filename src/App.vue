@@ -2,8 +2,6 @@
 import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
-import PDFViewer            from './components/PDFViewer.vue'
-import FileViewer           from './components/FileViewer.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
 
@@ -57,24 +55,30 @@ async function loadConfig() {
 
 // ── window manager ──
 const {
-  openWindows, pdfWindows, fileWindows,
-  openTool, closeWindow, closePDFWindow, closeFileWindow,
-  bringToFront, bringPDFToFront, bringFileToFront,
-  minimizeToolWindow, minimizePDFWindow, minimizeFileWindow,
-  openPDFViewer, openFileViewer, navigateFileViewer,
+  windows,
+  openWindow, closeWindow, bringToFront, minimizeWindow, updateWindow,
   setTaskbarButtonRef, getTaskbarButtonRect,
   allOpenWindows, focusedWindowId, hasOpenWindows,
   handleTaskbarClick,
 } = useWindowManager()
 
+function openTool(tool) {
+  openWindow({
+    title: tool.windowTitle, icon: tool.windowIcon,
+    width: tool.width, height: tool.height,
+    component: tool.component,
+    singletonKey: tool.id,
+  })
+}
+
 // Provide auth token and auth-aware fetch to child components
 provide('authToken', authToken)
 provide('authFetch', authFetch)
 
-// Provide functions to child components
-provide('openPDFViewer', openPDFViewer)
-provide('openFileViewer', openFileViewer)
-provide('navigateFileViewer', navigateFileViewer)
+// Provide window manager primitives to child components
+provide('openWindow', openWindow)
+provide('updateWindow', updateWindow)
+provide('windows', windows)
 provide('getTaskbarButtonRect', getTaskbarButtonRect)
 
 onMounted(() => {
@@ -158,62 +162,22 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 浮动窗口层 -->
     <AppWindow
-      v-for="win in openWindows"
+      v-for="win in windows"
       :key="win.id"
-      :windowId="'tool-' + win.id"
-      :title="win.tool.windowTitle"
-      :icon="win.tool.windowIcon"
-      :initial-width="win.tool.width"
-      :initial-height="win.tool.height"
+      :windowId="win.id"
+      :title="win.title"
+      :icon="win.icon"
+      :initial-width="win.width"
+      :initial-height="win.height"
       :zIndex="win.zIndex"
       :minimized="win.minimized"
       @close="closeWindow(win.id)"
       @raise="bringToFront(win.id)"
-      @minimize="minimizeToolWindow(win.id)"
+      @minimize="minimizeWindow(win.id)"
     >
-      <component :is="win.tool.component" />
-    </AppWindow>
-
-    <!-- PDF 查看器窗口层 -->
-    <AppWindow
-      v-for="win in pdfWindows"
-      :key="'pdf-' + win.id"
-      :windowId="'pdf-' + win.id"
-      :title="win.title"
-      icon="📄"
-      :initial-width="900"
-      :initial-height="700"
-      :zIndex="win.zIndex"
-      :minimized="win.minimized"
-      @close="closePDFWindow(win.id)"
-      @raise="bringPDFToFront(win.id)"
-      @minimize="minimizePDFWindow(win.id)"
-    >
-      <PDFViewer :pdfUrl="win.pdfUrl" />
-    </AppWindow>
-
-    <!-- 文件预览窗口层 (图片、文本、视频、音频) -->
-    <AppWindow
-      v-for="win in fileWindows"
-      :key="'file-' + win.id"
-      :windowId="'file-' + win.id"
-      :title="win.fileName"
-      :icon="win.icon"
-      :initial-width="800"
-      :initial-height="600"
-      :zIndex="win.zIndex"
-      :minimized="win.minimized"
-      @close="closeFileWindow(win.id)"
-      @raise="bringFileToFront(win.id)"
-      @minimize="minimizeFileWindow(win.id)"
-    >
-      <FileViewer
-        :fileUrl="win.fileUrl"
-        :fileName="win.fileName"
-        :mimeType="win.mimeType"
-        :fileList="win.fileList || []"
-        :currentIndex="win.currentIndex !== undefined ? win.currentIndex : -1"
-        @navigate="(newIndex) => navigateFileViewer(win.id, newIndex)"
+      <component
+        :is="win.component"
+        v-bind="win.props"
       />
     </AppWindow>
   </div>

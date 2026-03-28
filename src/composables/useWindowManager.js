@@ -1,245 +1,96 @@
-import { ref, computed } from 'vue'
+import { ref, computed, markRaw } from 'vue'
 
 export function useWindowManager() {
-  const openWindows = ref([])
-  const pdfWindows = ref([])
-  const fileWindows = ref([])
-  let winSeq = 0
-  let pdfWinSeq = 0
-  let fileWinSeq = 0
+  const windows = ref([])
+  let seq = 0
   let zCounter = 1000
 
-  // ── tool windows ──
-  function openTool(tool) {
-    if (openWindows.value.find(w => w.toolId === tool.id)) return
-    openWindows.value.push({ id: ++winSeq, toolId: tool.id, tool, zIndex: ++zCounter, minimized: false })
-  }
-
-  function closeWindow(winId) {
-    openWindows.value = openWindows.value.filter(w => w.id !== winId)
-  }
-
-  function bringToFront(winId) {
-    const win = openWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.zIndex = ++zCounter
-      win.minimized = false
-    }
-  }
-
-  function minimizeToolWindow(winId) {
-    const win = openWindows.value.find(w => w.id === winId)
-    if (win) win.minimized = true
-  }
-
-  function restoreToolWindow(winId) {
-    const win = openWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.minimized = false
-      bringToFront(winId)
-    }
-  }
-
-  // ── PDF windows ──
-  function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
-    pdfWindows.value.push({
-      id: ++pdfWinSeq,
-      pdfUrl,
-      title: title.length > 40 ? title.slice(0, 37) + '...' : title,
+  // singletonKey: 同一 key 只允许一个窗口存在
+  function openWindow({ title, icon = '', width = 800, height = 600, component, props = {}, singletonKey = null }) {
+    if (singletonKey && windows.value.find(w => w.singletonKey === singletonKey)) return null
+    const id = `win-${++seq}`
+    windows.value.push({
+      id, title, icon, width, height,
+      component: markRaw(component),
+      props,
+      singletonKey,
       zIndex: ++zCounter,
-      minimized: false
+      minimized: false,
     })
+    return id
   }
 
-  function closePDFWindow(winId) {
-    pdfWindows.value = pdfWindows.value.filter(w => w.id !== winId)
+  function closeWindow(id) {
+    windows.value = windows.value.filter(w => w.id !== id)
   }
 
-  function bringPDFToFront(winId) {
-    const win = pdfWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.zIndex = ++zCounter
-      win.minimized = false
-    }
+  function bringToFront(id) {
+    const win = windows.value.find(w => w.id === id)
+    if (win) { win.zIndex = ++zCounter; win.minimized = false }
   }
 
-  function minimizePDFWindow(winId) {
-    const win = pdfWindows.value.find(w => w.id === winId)
+  function minimizeWindow(id) {
+    const win = windows.value.find(w => w.id === id)
     if (win) win.minimized = true
   }
 
-  function restorePDFWindow(winId) {
-    const win = pdfWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.minimized = false
-      bringPDFToFront(winId)
-    }
+  function restoreWindow(id) {
+    const win = windows.value.find(w => w.id === id)
+    if (win) { win.minimized = false; bringToFront(id) }
   }
 
-  // ── file windows ──
-  function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
-    let icon = '📄'
-    if (mimeType?.startsWith('image/')) icon = '🖼'
-    else if (mimeType?.startsWith('video/')) icon = '🎬'
-    else if (mimeType?.startsWith('audio/')) icon = '🎵'
-    else if (mimeType?.startsWith('text/')) icon = '📝'
-
-    fileWindows.value.push({
-      id: ++fileWinSeq,
-      fileUrl,
-      fileName: fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName,
-      mimeType,
-      icon,
-      fileList,
-      currentIndex,
-      zIndex: ++zCounter,
-      minimized: false
-    })
-  }
-
-  function closeFileWindow(winId) {
-    fileWindows.value = fileWindows.value.filter(w => w.id !== winId)
-  }
-
-  function bringFileToFront(winId) {
-    const win = fileWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.zIndex = ++zCounter
-      win.minimized = false
-    }
-  }
-
-  function minimizeFileWindow(winId) {
-    const win = fileWindows.value.find(w => w.id === winId)
-    if (win) win.minimized = true
-  }
-
-  function restoreFileWindow(winId) {
-    const win = fileWindows.value.find(w => w.id === winId)
-    if (win) {
-      win.minimized = false
-      bringFileToFront(winId)
-    }
-  }
-
-  function navigateFileViewer(winId, newIndex) {
-    const win = fileWindows.value.find(w => w.id === winId)
-    if (!win || !win.fileList || newIndex < 0 || newIndex >= win.fileList.length) return
-
-    const newFile = win.fileList[newIndex]
-    win.currentIndex = newIndex
-    win.fileUrl = newFile.url
-    win.fileName = newFile.name.length > 40 ? newFile.name.slice(0, 37) + '...' : newFile.name
-    win.mimeType = newFile.mime
-
-    if (newFile.mime?.startsWith('image/')) win.icon = '🖼'
-    else if (newFile.mime?.startsWith('video/')) win.icon = '🎬'
-    else if (newFile.mime?.startsWith('audio/')) win.icon = '🎵'
-    else if (newFile.mime?.startsWith('text/')) win.icon = '📝'
-    else win.icon = '📄'
+  // 允许外部更新窗口标题、图标或 props（用于文件导航等场景）
+  function updateWindow(id, patch) {
+    const win = windows.value.find(w => w.id === id)
+    if (!win) return
+    if (patch.title !== undefined) win.title = patch.title
+    if (patch.icon  !== undefined) win.icon  = patch.icon
+    if (patch.props !== undefined) Object.assign(win.props, patch.props)
   }
 
   // ── taskbar ──
   const taskbarButtonRefs = ref(new Map())
 
   function setTaskbarButtonRef(el, winId) {
-    if (el) {
-      taskbarButtonRefs.value.set(winId, el)
-    }
+    if (el) taskbarButtonRefs.value.set(winId, el)
   }
 
   function getTaskbarButtonRect(winId) {
     const el = taskbarButtonRefs.value.get(winId)
-    if (el) {
-      const rect = el.getBoundingClientRect()
-      return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        width: rect.width,
-        height: rect.height
-      }
-    }
-    return null
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, width: r.width, height: r.height }
   }
 
-  const allOpenWindows = computed(() => {
-    const tools = openWindows.value.map(w => ({
-      id: `tool-${w.id}`,
-      winId: w.id,
-      type: 'tool',
-      title: w.tool.windowTitle,
-      icon: w.tool.windowIcon,
-      zIndex: w.zIndex,
-      minimized: w.minimized,
+  // ── computed ──
+  const allOpenWindows = computed(() =>
+    windows.value.map(w => ({
+      id: w.id, title: w.title, icon: w.icon,
+      zIndex: w.zIndex, minimized: w.minimized,
       bringToFront: () => bringToFront(w.id),
-      minimize: () => minimizeToolWindow(w.id),
-      restore: () => restoreToolWindow(w.id)
+      minimize:     () => minimizeWindow(w.id),
+      restore:      () => restoreWindow(w.id),
     }))
-    const pdfs = pdfWindows.value.map(w => ({
-      id: `pdf-${w.id}`,
-      winId: w.id,
-      type: 'pdf',
-      title: w.title,
-      icon: '📄',
-      zIndex: w.zIndex,
-      minimized: w.minimized,
-      bringToFront: () => bringPDFToFront(w.id),
-      minimize: () => minimizePDFWindow(w.id),
-      restore: () => restorePDFWindow(w.id)
-    }))
-    const files = fileWindows.value.map(w => ({
-      id: `file-${w.id}`,
-      winId: w.id,
-      type: 'file',
-      title: w.fileName,
-      icon: w.icon,
-      zIndex: w.zIndex,
-      minimized: w.minimized,
-      bringToFront: () => bringFileToFront(w.id),
-      minimize: () => minimizeFileWindow(w.id),
-      restore: () => restoreFileWindow(w.id)
-    }))
-    return [...tools, ...pdfs, ...files]
-  })
+  )
 
   const focusedWindowId = computed(() => {
-    const all = [...openWindows.value, ...pdfWindows.value, ...fileWindows.value]
-    if (all.length === 0) return null
-    const maxZ = Math.max(...all.map(w => w.zIndex))
-    const focused = all.find(w => w.zIndex === maxZ)
-    if (!focused) return null
-    if (openWindows.value.includes(focused)) return `tool-${focused.id}`
-    if (pdfWindows.value.includes(focused)) return `pdf-${focused.id}`
-    if (fileWindows.value.includes(focused)) return `file-${focused.id}`
-    return null
+    if (!windows.value.length) return null
+    const maxZ = Math.max(...windows.value.map(w => w.zIndex))
+    return windows.value.find(w => w.zIndex === maxZ)?.id ?? null
   })
 
-  const hasOpenWindows = computed(() => allOpenWindows.value.length > 0)
-
-  function isWindowFocused(win) {
-    return focusedWindowId.value === win.id && !win.minimized
-  }
+  const hasOpenWindows = computed(() => windows.value.length > 0)
 
   function handleTaskbarClick(win) {
-    if (win.minimized) {
-      win.restore()
-      return
-    }
-    if (isWindowFocused(win)) {
-      win.minimize()
-    } else {
-      win.bringToFront()
-    }
+    if (win.minimized) { win.restore(); return }
+    if (focusedWindowId.value === win.id) win.minimize()
+    else win.bringToFront()
   }
 
   return {
-    openWindows, pdfWindows, fileWindows,
-    openTool, closeWindow, closePDFWindow, closeFileWindow,
-    bringToFront, bringPDFToFront, bringFileToFront,
-    minimizeToolWindow, minimizePDFWindow, minimizeFileWindow,
-    openPDFViewer, openFileViewer, navigateFileViewer,
+    windows,
+    openWindow, closeWindow, bringToFront, minimizeWindow, restoreWindow, updateWindow,
     setTaskbarButtonRef, getTaskbarButtonRect,
-    allOpenWindows, focusedWindowId, hasOpenWindows,
-    handleTaskbarClick,
+    allOpenWindows, focusedWindowId, hasOpenWindows, handleTaskbarClick,
   }
 }

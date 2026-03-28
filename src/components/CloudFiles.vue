@@ -13,13 +13,59 @@ export const toolMeta = {
 </script>
 
 <script setup>
-import { ref, computed, onMounted, onErrorCaptured, inject } from 'vue'
+import { ref, computed, onMounted, onErrorCaptured, inject, markRaw } from 'vue'
+import PDFViewer  from './PDFViewer.vue'
+import FileViewer from './FileViewer.vue'
+
+const PDFViewerRaw  = markRaw(PDFViewer)
+const FileViewerRaw = markRaw(FileViewer)
 
 // ── state ──
-const openPDFViewer = inject('openPDFViewer')
-const openFileViewer = inject('openFileViewer')
+const openWindow   = inject('openWindow')
+const updateWindow = inject('updateWindow')
+const windows      = inject('windows')
 const authFetch = inject('authFetch')
 const authToken = inject('authToken')
+
+function mimeToIcon(mime) {
+  if (mime?.startsWith('image/')) return '🖼'
+  if (mime?.startsWith('video/')) return '🎬'
+  if (mime?.startsWith('audio/')) return '🎵'
+  if (mime?.startsWith('text/'))  return '📝'
+  return '📄'
+}
+
+function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
+  openWindow({
+    title: title.length > 40 ? title.slice(0, 37) + '...' : title,
+    icon: '📄', width: 900, height: 700,
+    component: PDFViewerRaw,
+    props: { pdfUrl },
+  })
+}
+
+function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  let winId = null
+  winId = openWindow({
+    title: shortName, icon: mimeToIcon(mimeType),
+    width: 800, height: 600,
+    component: FileViewerRaw,
+    props: { fileUrl, fileName: shortName, mimeType, fileList, currentIndex,
+             onNavigate: (i) => navigateFileViewer(winId, i) },
+  })
+}
+
+function navigateFileViewer(winId, newIndex) {
+  const win = windows.value.find(w => w.id === winId)
+  if (!win?.props?.fileList || newIndex < 0 || newIndex >= win.props.fileList.length) return
+  const f = win.props.fileList[newIndex]
+  const shortName = f.name.length > 40 ? f.name.slice(0, 37) + '...' : f.name
+  updateWindow(winId, {
+    title: shortName, icon: mimeToIcon(f.mime),
+    props: { fileUrl: f.url, fileName: shortName, mimeType: f.mime, currentIndex: newIndex },
+  })
+}
 
 // Build a raw file URL, appending ?token= for routes that need auth
 // but are accessed via <img src>, <video src>, <a href> (can't set headers)
