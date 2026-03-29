@@ -14,11 +14,13 @@ export const toolMeta = {
 
 <script setup>
 import { ref, computed, onMounted, onErrorCaptured, inject, markRaw } from 'vue'
-import PDFViewer  from './PDFViewer.vue'
-import FileViewer from './FileViewer.vue'
+import PDFViewer    from './PDFViewer.vue'
+import FileViewer   from './FileViewer.vue'
+import OfficeViewer from './OfficeViewer.vue'
 
-const PDFViewerRaw  = markRaw(PDFViewer)
-const FileViewerRaw = markRaw(FileViewer)
+const PDFViewerRaw    = markRaw(PDFViewer)
+const FileViewerRaw   = markRaw(FileViewer)
+const OfficeViewerRaw = markRaw(OfficeViewer)
 
 // ── state ──
 const openWindow   = inject('openWindow')
@@ -41,6 +43,16 @@ function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
     icon: '📄', width: 900, height: 700,
     component: PDFViewerRaw,
     props: { pdfUrl },
+  })
+}
+
+function openOfficeViewer(fileUrl, fileName, fileType) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  openWindow({
+    title: shortName,
+    icon: '📑', width: 900, height: 700,
+    component: OfficeViewerRaw,
+    props: { fileUrl, fileName: shortName, fileType },
   })
 }
 
@@ -141,6 +153,14 @@ function fileTypeIcon(mime, type) {
 }
 
 function isPDF(mime) { return mime && mime.includes('pdf') }
+
+function isOffice(mime) {
+  if (!mime) return false
+  return mime.includes('wordprocessingml')
+      || mime.includes('spreadsheetml')
+      || mime === 'application/vnd.ms-excel'
+      || mime.includes('presentationml')
+}
 
 function isImage(mime) { return mime && mime.startsWith('image/') }
 function isText(mime) {
@@ -310,6 +330,12 @@ async function openPreview(file) {
     if (openPDFViewer) {
       openPDFViewer(fileUrl, file.name)
     }
+    return
+  }
+
+  // Open office documents (docx, xlsx, xls, pptx) in office viewer
+  if (isOffice(file.mime)) {
+    openOfficeViewer(fileUrl, file.name, file.mime)
     return
   }
 
