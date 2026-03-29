@@ -2,17 +2,10 @@
 import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
-import PDFViewer            from './components/PDFViewer.vue'
-import FileViewer           from './components/FileViewer.vue'
-import { useWindowManager } from './composables/useWindowManager.js'
+import { useWindowStore } from './composables/useWindowStore.js'
 import { useAuth }          from './composables/useAuth.js'
-
-// 动态加载所有带 toolMeta 的工具组件
-const toolModules = import.meta.glob('./components/*.vue', { eager: true })
-const allTools = Object.values(toolModules)
-  .filter(mod => mod.toolMeta)
-  .map(mod => ({ ...mod.toolMeta, component: markRaw(mod.default) }))
-  .sort((a, b) => a.order - b.order)
+import {useAppStore} from "@/composables/useAppStore.js";
+import {storeToRefs} from "pinia";
 
 // ── auth ──
 const {
@@ -37,11 +30,9 @@ const dateStr = computed(() => {
 // ── tools registry ──
 const toolConfig = ref({})
 
+const appStore = useAppStore()
 // 根据配置过滤启用的工具
-const tools = computed(() => {
-  const cfg = toolConfig.value
-  return allTools.filter(tool => cfg[tool.id]?.enabled !== false)
-})
+const {allApps} = storeToRefs(appStore)
 
 // 加载外部配置
 async function loadConfig() {
@@ -55,26 +46,23 @@ async function loadConfig() {
   }
 }
 
+const windowStore = useWindowStore()
+const {
+  openApp, closeWindow,
+  bringToFront,
+  minimizeWindow,
+  openWindowWithId,
+  setTaskbarButtonRef, getTaskbarButtonRect,
+  handleTaskbarClick,
+} = windowStore
 // ── window manager ──
 const {
-  openWindows, pdfWindows, fileWindows,
-  openTool, closeWindow, closePDFWindow, closeFileWindow,
-  bringToFront, bringPDFToFront, bringFileToFront,
-  minimizeToolWindow, minimizePDFWindow, minimizeFileWindow,
-  openPDFViewer, openFileViewer, navigateFileViewer,
-  setTaskbarButtonRef, getTaskbarButtonRect,
   allOpenWindows, focusedWindowId, hasOpenWindows,
-  handleTaskbarClick,
-} = useWindowManager()
+} = storeToRefs(windowStore)
 
 // Provide auth token and auth-aware fetch to child components
 provide('authToken', authToken)
 provide('authFetch', authFetch)
-
-// Provide functions to child components
-provide('openPDFViewer', openPDFViewer)
-provide('openFileViewer', openFileViewer)
-provide('navigateFileViewer', navigateFileViewer)
 provide('getTaskbarButtonRect', getTaskbarButtonRect)
 
 onMounted(() => {
@@ -110,8 +98,8 @@ onUnmounted(() => clearInterval(timer))
           @click="handleTaskbarClick(win)"
           :title="win.title"
         >
-          <span class="taskbar-icon">{{ win.icon }}</span>
-          <span class="taskbar-title">{{ win.title }}</span>
+          <span class="taskbar-icon">{{ win.windowIcon }}</span>
+          <span class="taskbar-title">{{ win.windowTitle }}</span>
         </button>
       </TransitionGroup>
     </div>
@@ -142,10 +130,10 @@ onUnmounted(() => clearInterval(timer))
       <section class="launcher-section">
         <div class="launcher-grid">
           <button
-            v-for="tool in tools"
+            v-for="tool in allApps"
             :key="tool.id"
             class="tool-item"
-            @click="openTool(tool)"
+            @click="openApp(tool)"
           >
             <div class="tool-icon-wrap" :style="{ background: tool.gradient }">
               <span class="tool-icon">{{ tool.icon }}</span>
@@ -158,63 +146,20 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 浮动窗口层 -->
     <AppWindow
-      v-for="win in openWindows"
+      v-for="win in allOpenWindows"
       :key="win.id"
-      :windowId="'tool-' + win.id"
-      :title="win.tool.windowTitle"
-      :icon="win.tool.windowIcon"
-      :initial-width="win.tool.width"
-      :initial-height="win.tool.height"
+      :windowId="win.windowId"
+      v-model:title="win.windowTitle"
+      v-model:icon="win.windowIcon"
+      :initial-width="win.width"
+      :initial-height="win.height"
       :zIndex="win.zIndex"
-      :minimized="win.minimized"
+      v-model:minimized="win.minimized"
       @close="closeWindow(win.id)"
       @raise="bringToFront(win.id)"
-      @minimize="minimizeToolWindow(win.id)"
+      @minimize="minimizeWindow(win.id)"
     >
-      <component :is="win.tool.component" />
-    </AppWindow>
-
-    <!-- PDF 查看器窗口层 -->
-    <AppWindow
-      v-for="win in pdfWindows"
-      :key="'pdf-' + win.id"
-      :windowId="'pdf-' + win.id"
-      :title="win.title"
-      icon="📄"
-      :initial-width="900"
-      :initial-height="700"
-      :zIndex="win.zIndex"
-      :minimized="win.minimized"
-      @close="closePDFWindow(win.id)"
-      @raise="bringPDFToFront(win.id)"
-      @minimize="minimizePDFWindow(win.id)"
-    >
-      <PDFViewer :pdfUrl="win.pdfUrl" />
-    </AppWindow>
-
-    <!-- 文件预览窗口层 (图片、文本、视频、音频) -->
-    <AppWindow
-      v-for="win in fileWindows"
-      :key="'file-' + win.id"
-      :windowId="'file-' + win.id"
-      :title="win.fileName"
-      :icon="win.icon"
-      :initial-width="800"
-      :initial-height="600"
-      :zIndex="win.zIndex"
-      :minimized="win.minimized"
-      @close="closeFileWindow(win.id)"
-      @raise="bringFileToFront(win.id)"
-      @minimize="minimizeFileWindow(win.id)"
-    >
-      <FileViewer
-        :fileUrl="win.fileUrl"
-        :fileName="win.fileName"
-        :mimeType="win.mimeType"
-        :fileList="win.fileList || []"
-        :currentIndex="win.currentIndex !== undefined ? win.currentIndex : -1"
-        @navigate="(newIndex) => navigateFileViewer(win.id, newIndex)"
-      />
+      <component :is="win.component" v-bind="win.props"/>
     </AppWindow>
   </div>
 </template>

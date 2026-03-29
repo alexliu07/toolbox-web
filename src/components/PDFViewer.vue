@@ -1,3 +1,12 @@
+<script>
+export const windowMeta = {
+  windowTitle: 'PDF 阅读器',
+  windowIcon: '📄',
+  width: 1000,
+  height: 640,
+  windowId: 'pdfViewer',
+}
+</script>
 <script setup>
 import { ref, shallowRef, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'

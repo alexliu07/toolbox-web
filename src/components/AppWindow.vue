@@ -1,17 +1,22 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
+import {ref, computed, onMounted, onUnmounted, nextTick, watch, inject, provide} from 'vue'
 
 const props = defineProps({
-  title: { type: String, default: 'App' },
-  icon: { type: String, default: '' },
   initialWidth: { type: Number, default: 800 },
   initialHeight: { type: Number, default: 520 },
   minWidth: { type: Number, default: 400 },
   minHeight: { type: Number, default: 300 },
   zIndex: { type: Number, default: 1000 },
-  minimized: { type: Boolean, default: false },
   windowId: { type: String, default: '' },
 })
+
+const title = defineModel('title', {default: 'App'})
+const icon = defineModel('icon', {default: ''})
+const minimized = defineModel('minimized', {default: false})
+
+provide("title", title)
+provide("icon", icon)
+provide("minimized", minimized)
 
 const emit = defineEmits(['close', 'raise', 'minimize'])
 
@@ -54,7 +59,7 @@ onMounted(async () => {
 })
 
 // 监听 minimized 变化，触发动画
-watch(() => props.minimized, async (newVal, oldVal) => {
+watch( minimized, async (newVal, oldVal) => {
   if (newVal === oldVal) return
 
   if (newVal) {

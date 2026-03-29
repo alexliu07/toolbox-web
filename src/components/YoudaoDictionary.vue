@@ -1,14 +1,18 @@
 <script>
-export const toolMeta = {
+export const appMeta = {
+  // id和windowId相同
   id: 'youdao',
   name: '有道词典',
   icon: '📚',
   gradient: 'linear-gradient(135deg,#e11d48,#be123c)',
+  order: 6,
+}
+export const windowMeta = {
   windowTitle: '有道词典',
   windowIcon: '📚',
   width: 600,
   height: 520,
-  order: 6,
+  windowId: 'youdao',
 }
 </script>
 

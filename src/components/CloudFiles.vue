@@ -1,23 +1,44 @@
 <script>
-export const toolMeta = {
+export const appMeta = {
+  // id和windowId相同
   id: 'cloudfiles',
   name: '云文件',
   icon: '☁️',
   gradient: 'linear-gradient(135deg,#0f4c81,#1a8fe3)',
+  order: 5,
+}
+export const windowMeta = {
   windowTitle: '云文件管理',
   windowIcon: '☁️',
   width: 900,
   height: 600,
-  order: 5,
+  windowId: 'cloudfiles',
 }
 </script>
 
 <script setup>
 import { ref, computed, onMounted, onErrorCaptured, inject } from 'vue'
+import {useWindowStore} from "@/composables/useWindowStore.js";
+import {useWindowConfig} from "@/composables/useWindowConfig.js";
 
-// ── state ──
-const openPDFViewer = inject('openPDFViewer')
-const openFileViewer = inject('openFileViewer')
+const windowManager = useWindowStore()
+function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
+  windowManager.openWindowWithId("pdfViewer",
+      {windowTitle:title}, {pdfUrl: pdfUrl})
+}
+
+function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
+  let icon = '📄'
+  if (mimeType?.startsWith('image/')) icon = '🖼'
+  else if (mimeType?.startsWith('video/')) icon = '🎬'
+  else if (mimeType?.startsWith('audio/')) icon = '🎵'
+  else if (mimeType?.startsWith('text/')) icon = '📝'
+  let name = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+
+  windowManager.openWindowWithId("fileViewer",
+      {windowIcon: icon, windowTitle: name},
+      {fileUrl: fileUrl, fileName: name, mimeType: mimeType, fileList: fileList},)
+}
 const authFetch = inject('authFetch')
 const authToken = inject('authToken')
 

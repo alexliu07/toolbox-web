@@ -1,14 +1,18 @@
 <script>
-export const toolMeta = {
+export const appMeta = {
+  // id和windowId相同
   id: 'dino',
   name: '小恐龙',
   icon: '🦕',
   gradient: 'linear-gradient(135deg,#3a8c5c,#1d5e3a)',
+  order: 1,
+}
+export const windowMeta = {
   windowTitle: 'Chrome Dino',
   windowIcon: '🦕',
   width: 800,
   height: 380,
-  order: 1,
+  windowId: 'dino',
 }
 </script>
 

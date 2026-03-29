@@ -1,5 +1,15 @@
+<script>
+export const windowMeta = {
+  windowTitle: '文件查看器',
+  windowIcon: '📄',
+  width: 800,
+  height: 600,
+  windowId: 'fileViewer',
+}
+</script>
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, inject } from 'vue'
+import {useWindowConfig} from "@/composables/useWindowConfig.js";
 
 const props = defineProps({
   fileUrl: { type: String, required: true },
@@ -9,7 +19,24 @@ const props = defineProps({
   currentIndex: { type: Number, default: -1 }     // index in fileList
 })
 
-const emit = defineEmits(['navigate'])
+let {title, icon, minimize} = useWindowConfig()
+
+function navigateFileViewer(newIndex) {
+  if (!props.fileList || newIndex < 0 || newIndex >= props.fileList.length) return
+
+  const newFile = props.fileList[newIndex]
+  props.currentIndex = newIndex
+  props.fileUrl = newFile.url
+  props.fileName = newFile.name.length > 40 ? newFile.name.slice(0, 37) + '...' : newFile.name
+  props.mimeType = newFile.mime
+  title.value = props.fileName
+
+  if (newFile.mime?.startsWith('image/')) icon.value = '🖼'
+  else if (newFile.mime?.startsWith('video/')) icon.value = '🎬'
+  else if (newFile.mime?.startsWith('audio/')) icon.value = '🎵'
+  else if (newFile.mime?.startsWith('text/')) icon.value = '📝'
+  else icon.value = '📄'
+}
 
 const authToken = inject('authToken', null)
 
@@ -43,14 +70,14 @@ const canGoNext = computed(() => props.currentIndex >= 0 && props.currentIndex <
 function goPrev() {
   if (canGoPrev.value) {
     resetImageControls()
-    emit('navigate', props.currentIndex - 1)
+    navigateFileViewer(props.currentIndex - 1)
   }
 }
 
 function goNext() {
   if (canGoNext.value) {
     resetImageControls()
-    emit('navigate', props.currentIndex + 1)
+    navigateFileViewer(props.currentIndex + 1)
   }
 }
 

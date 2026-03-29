@@ -1,14 +1,18 @@
 <script>
-export const toolMeta = {
+export const appMeta = {
+  // id和windowId相同
   id: 'drawing',
   name: '画板',
   icon: '🎨',
   gradient: 'linear-gradient(135deg,#d97706,#dc2626)',
+  order: 4,
+}
+export const windowMeta = {
   windowTitle: '画板',
   windowIcon: '🎨',
   width: 900,
   height: 620,
-  order: 4,
+  windowId: 'drawing',
 }
 </script>
 
