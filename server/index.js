@@ -7,6 +7,7 @@ import desmosRouter from './routes/desmos.js'
 import drawingsRouter from './routes/drawings.js'
 import sharedFoldersRouter from './routes/shared-folders.js'
 import youdaoRouter from './routes/youdao.js'
+import yunchengjiRouter from './routes/yunchengji.js'
 import authRouter from './routes/auth.js'
 
 const app = express()
@@ -22,6 +23,7 @@ app.use('/api/desmos', desmosRouter)
 app.use('/api/drawings', drawingsRouter)
 app.use('/api/shared-folders', sharedFoldersRouter)
 app.use('/api/youdao', youdaoRouter)
+app.use('/api/yunchengji', yunchengjiRouter)
 
 // Initialize database then start server
 initDatabase().then(() => {
