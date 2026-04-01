@@ -33,6 +33,8 @@ const error   = ref('')
 const scale   = ref(1)
 const currentPage = ref(1)
 const totalPages  = ref(0)
+const pdfReady = ref(false) // true after pdf rendered and page count resolved
+const showPdf = ref(false) // delay PDF mount until container is ready
 const excelOptions = { minColLength: 20, xls: false, minRowLength: 0, showContextmenu: false }
 
 // Component refs
@@ -71,37 +73,6 @@ function getScrollTarget() {
   return getNonPdfScrollContainer()
 }
 
-// ── PDF: page tracking via scroll ──
-let pdfScrollHandler = null
-function setupPDFScrollTracking() {
-  const container = getPDFContainer()
-  if (!container) return
-  pdfScrollHandler = () => {
-    const pages = container.querySelectorAll('canvas, img, [data-page-number]')
-    if (!pages.length) return
-    const containerRect = container.getBoundingClientRect()
-    const containerCenter = containerRect.top + containerRect.height / 2
-    let bestPage = 1
-    let bestDist = Infinity
-    pages.forEach((el, i) => {
-      const rect = el.getBoundingClientRect()
-      const elCenter = rect.top + rect.height / 2
-      const dist = Math.abs(elCenter - containerCenter)
-      if (dist < bestDist) { bestDist = dist; bestPage = i + 1 }
-    })
-    currentPage.value = bestPage
-  }
-  container.addEventListener('scroll', pdfScrollHandler, { passive: true })
-}
-
-function cleanupPDFScrollTracking() {
-  const container = getPDFContainer()
-  if (container && pdfScrollHandler) {
-    container.removeEventListener('scroll', pdfScrollHandler)
-    pdfScrollHandler = null
-  }
-}
-
 // ── rendered / error handlers ──
 function onRendered() {
   loading.value = false
@@ -124,15 +95,88 @@ function onRendered() {
     }
   })
   if (isPDF.value) {
-    nextTick(() => {
+    resolvePDFPageCount()
+  }
+}
+
+// ── PDF scroll → current page tracking ──
+let pdfScrollHandler = null
+function setupPDFScrollTracking() {
+  const container = getPDFContainer()
+  if (!container || pdfScrollHandler) return
+  pdfScrollHandler = () => {
+    if (!totalPages.value) return
+    const scrollTop = container.scrollTop
+    const paddingTop = 30 // matches vue-office-pdf-wrapper padding-top
+    const gap = 10
+    const totalH = container.scrollHeight
+    const paddingAndGaps = paddingTop * 2 + gap * (totalPages.value - 1)
+    const pagesTotalH = totalH - paddingAndGaps
+    const singlePageH = pagesTotalH / totalPages.value
+    const effectiveScroll = Math.max(0, scrollTop - paddingTop)
+    const page = Math.min(
+      totalPages.value,
+      Math.max(1, Math.floor(effectiveScroll / (singlePageH + gap)) + 1)
+    )
+    currentPage.value = page
+  }
+  container.addEventListener('scroll', pdfScrollHandler, { passive: true })
+}
+
+function cleanupPDFScrollTracking() {
+  const container = getPDFContainer()
+  if (container && pdfScrollHandler) {
+    container.removeEventListener('scroll', pdfScrollHandler)
+    pdfScrollHandler = null
+  }
+}
+
+// ── PDF page count: poll wrapper height until stable ──
+function resolvePDFPageCount() {
+  const container = getPDFContainer()
+  if (!container) { setTimeout(() => resolvePDFPageCount(), 100); return }
+  const wrapper = container.querySelector('.vue-office-pdf-wrapper')
+  if (!wrapper) { setTimeout(() => resolvePDFPageCount(), 100); return }
+
+  let prevHeight = -1
+  let stableCount = 0
+  const check = () => {
+    const h = wrapper.scrollHeight
+    if (h === prevHeight) {
+      stableCount++
+    } else {
+      stableCount = 0
+      prevHeight = h
+    }
+    // Height stable for 300ms = rendering settled
+    if (stableCount >= 3) {
+      // Read page count from component
       if (pdfRef.value?.numPages != null) {
-        totalPages.value = typeof pdfRef.value.numPages === 'object'
+        const n = typeof pdfRef.value.numPages === 'object'
           ? pdfRef.value.numPages.value
           : pdfRef.value.numPages
+        if (n > 0) { totalPages.value = n; pdfReady.value = true; setupPDFScrollTracking(); return }
       }
-      setupPDFScrollTracking()
-    })
+      // Estimate from canvas height and total height
+      const canvas = wrapper.querySelector('canvas')
+      if (canvas) {
+        const gap = 10
+        const pageH = canvas.getBoundingClientRect().height
+        const totalH = wrapper.getBoundingClientRect().height
+        if (pageH > 0) {
+          // totalH = pageCount * pageH + (pageCount-1) * gap + paddingTop(30) + paddingBottom(30)
+          const padding = 60
+          const est = Math.round((totalH - padding + gap) / (pageH + gap))
+          if (est > 0) { totalPages.value = est; pdfReady.value = true; setupPDFScrollTracking(); return }
+        }
+      }
+      // Fallback: try again later
+      setTimeout(() => resolvePDFPageCount(), 200)
+      return
+    }
+    setTimeout(check, 100)
   }
+  check()
 }
 
 function onError(e) {
@@ -148,8 +192,12 @@ function resetZoom() { applyScale(1) }
 
 function applyScale(newScale) {
   scale.value = newScale
-  if (isPDF.value && pdfRef.value?.setScale) {
-    pdfRef.value.setScale(newScale)
+  if (isPDF.value) {
+    // @vue-office/pdf reads options.defaultScale only at init.
+    // Use setScale which updates the reactive ref and re-renders pages.
+    if (pdfRef.value?.setScale) {
+      pdfRef.value.setScale(newScale)
+    }
     return
   }
   // Non-PDF: apply CSS transform to the -main inner element
@@ -189,6 +237,11 @@ function scrollBy(dy, dx) {
 }
 
 // ── PDF page navigation ──
+// @vue-office/pdf uses a virtual scroll canvas. We can't access page elements directly.
+// Scroll by the height of one rendered page + gap to move between pages.
+const PDF_PAGE_GAP = 10
+const PDF_WRAPPER_PADDING = 30 // top padding of wrapper
+
 function prevPage() { if (currentPage.value > 1) goToPage(currentPage.value - 1) }
 function nextPage() { if (currentPage.value < totalPages.value) goToPage(currentPage.value + 1) }
 
@@ -200,22 +253,28 @@ function goToPage(num) {
   if (!container) return
   const wrapper = container.querySelector('.vue-office-pdf-wrapper')
   if (!wrapper) return
-  const children = wrapper.children
-  if (page - 1 < children.length) {
-    container.scrollTo({ top: children[page - 1].offsetTop, behavior: 'smooth' })
-  }
+
+  // Estimate scroll position from page number
+  const totalH = wrapper.scrollHeight
+  const paddingAndGaps = PDF_WRAPPER_PADDING * 2 + PDF_PAGE_GAP * (totalPages.value - 1)
+  const pagesTotalH = totalH - paddingAndGaps
+  const singlePageH = pagesTotalH / totalPages.value
+  const targetScroll = PDF_WRAPPER_PADDING + (page - 1) * (singlePageH + PDF_PAGE_GAP)
+  container.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' })
 }
 
 // ── cleanup ──
 onUnmounted(() => { cleanupPDFScrollTracking() })
 
-watch(() => props.fileUrl, () => {
+watch(() => props.fileUrl, (url) => {
+  cleanupPDFScrollTracking()
   loading.value = true
   error.value = ''
   currentPage.value = 1
   totalPages.value = 0
+  pdfReady.value = false
+  showPdf.value = false
   scale.value = 1
-  cleanupPDFScrollTracking()
   // Reset CSS transform
   nextTick(() => {
     const content = contentRef.value
@@ -226,7 +285,12 @@ watch(() => props.fileUrl, () => {
       main.style.transformOrigin = ''
     }
   })
-})
+  // For PDF: wait for the window open animation (~400ms) to finish so the
+  // container has its final size before @vue-office/pdf measures it.
+  if (isPDF.value && url) {
+    setTimeout(() => { showPdf.value = true }, 450)
+  }
+}, { immediate: true })
 </script>
 
 <template>
@@ -234,7 +298,7 @@ watch(() => props.fileUrl, () => {
     <!-- Toolbar -->
     <div class="ov-toolbar">
       <!-- PDF page navigation -->
-      <div class="ov-toolbar-group" v-if="isPDF">
+      <div class="ov-toolbar-group" v-if="isPDF && pdfReady">
         <button class="ov-btn" :disabled="currentPage <= 1" @click="prevPage" title="上一页">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 4l-6 6 6 6"/>
@@ -313,15 +377,13 @@ watch(() => props.fileUrl, () => {
         <span>{{ error }}</span>
       </div>
 
-      <!-- PDF -->
+      <!-- PDF — delay mount until container is sized by the window open animation -->
       <VueOfficePdf
-        v-if="isPDF && !error"
+        v-if="isPDF && !error && showPdf"
         ref="pdfRef"
         :src="fileUrl"
-        :defaultScale="scale"
         @rendered="onRendered"
         @error="onError"
-        v-show="!loading"
       />
 
       <!-- DOCX -->

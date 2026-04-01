@@ -14,11 +14,9 @@ export const toolMeta = {
 
 <script setup>
 import { ref, computed, onMounted, onErrorCaptured, inject, markRaw } from 'vue'
-import PDFViewer    from './PDFViewer.vue'
 import FileViewer   from './FileViewer.vue'
 import OfficeViewer from './OfficeViewer.vue'
 
-const PDFViewerRaw    = markRaw(PDFViewer)
 const FileViewerRaw   = markRaw(FileViewer)
 const OfficeViewerRaw = markRaw(OfficeViewer)
 
@@ -35,15 +33,6 @@ function mimeToIcon(mime) {
   if (mime?.startsWith('audio/')) return '🎵'
   if (mime?.startsWith('text/'))  return '📝'
   return '📄'
-}
-
-function openPDFViewer(pdfUrl, title = 'PDF Viewer') {
-  openWindow({
-    title: title.length > 40 ? title.slice(0, 37) + '...' : title,
-    icon: '📄', width: 900, height: 700,
-    component: PDFViewerRaw,
-    props: { pdfUrl },
-  })
 }
 
 function openOfficeViewer(fileUrl, fileName, fileType) {
@@ -325,16 +314,8 @@ async function openPreview(file) {
     fileUrl = rawUrl(file.name)
   }
 
-  // Open PDF in PDF viewer
-  if (isPDF(file.mime)) {
-    if (openPDFViewer) {
-      openPDFViewer(fileUrl, file.name)
-    }
-    return
-  }
-
-  // Open office documents (docx, xlsx, xls, pptx) in office viewer
-  if (isOffice(file.mime)) {
+  // Open PDF and office documents in office viewer
+  if (isPDF(file.mime) || isOffice(file.mime)) {
     openOfficeViewer(fileUrl, file.name, file.mime)
     return
   }
