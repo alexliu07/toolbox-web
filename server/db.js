@@ -338,22 +338,22 @@ export function deleteUserDrawing(userId, name) {
 }
 
 // Auto-save database periodically (every 30 seconds)
-setInterval(() => {
-  if (db) saveDatabase()
+const autoSaveTimer = setInterval(() => {
+  if (db && !shuttingDown) saveDatabase()
 }, 30000)
 
 // Save on process exit
-process.on('exit', () => {
-  if (db) {
-    saveDatabase()
-    db.close()
-  }
-})
-
-process.on('SIGINT', () => {
-  if (db) {
-    saveDatabase()
-    db.close()
-  }
+let shuttingDown = false
+function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  // Clear the auto-save interval to prevent re-entrant saves
+  clearInterval(autoSaveTimer)
+  // db.export() / db.close() use Emscripten sync file I/O which may fail
+  // during Node teardown (especially under concurrently).  The 30s auto-save
+  // already keeps data current, so just exit cleanly.
   process.exit(0)
-})
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
