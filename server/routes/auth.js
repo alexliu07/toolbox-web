@@ -8,9 +8,8 @@ import {
   createToken,
   deleteToken,
   cleanExpiredTokens,
-  getTokenRecord,
-  getUserById,
 } from '../db.js'
+import { requireAuth } from '../middleware/auth.js'
 
 const router = express.Router()
 
@@ -96,28 +95,8 @@ router.post('/logout', (req, res) => {
 })
 
 // GET /api/auth/me — verify token and return user info
-router.get('/me', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  if (!token) {
-    return res.status(401).json({ error: '未登录' })
-  }
-
-  try {
-    const record = getTokenRecord(token)
-    if (!record) {
-      return res.status(401).json({ error: 'token 无效或已过期' })
-    }
-
-    const user = getUserById(record.user_id)
-    if (!user) {
-      return res.status(401).json({ error: '用户不存在' })
-    }
-
-    res.json({ username: user.username, displayName: user.display_name })
-  } catch (err) {
-    console.error('[auth] me error:', err)
-    res.status(500).json({ error: '验证失败' })
-  }
+router.get('/me', requireAuth, (req, res) => {
+  res.json({ username: req.user.username, displayName: req.user.display_name })
 })
 
 export default router
