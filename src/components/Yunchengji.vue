@@ -13,7 +13,9 @@ export const toolMeta = {
 </script>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, inject } from 'vue'
+
+const authFetch = inject('authFetch')
 
 // State
 const phase = ref('login') // login | exams | detail
@@ -41,6 +43,20 @@ const subjectDetail = ref(null)
 const questionList = ref(null)
 const detailLoading = ref(false)
 
+// ── Auto-load saved credentials ──
+onMounted(async () => {
+  try {
+    const res = await authFetch('/api/data/yunchengji-creds')
+    if (res.ok) {
+      const creds = await res.json()
+      if (creds) {
+        if (creds.username) username.value = creds.username
+        if (creds.password) password.value = creds.password
+      }
+    }
+  } catch {}
+})
+
 // ── Login ──
 async function login() {
   loginError.value = ''
@@ -61,6 +77,12 @@ async function login() {
       return
     }
     sessionId.value = data.sessionId
+    // Save credentials silently
+    authFetch('/api/data/yunchengji-creds', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username.value.trim(), password: password.value.trim() }),
+    }).catch(() => {})
     await loadExams()
   } catch (e) {
     loginError.value = '网络错误，请重试'
