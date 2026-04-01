@@ -314,6 +314,17 @@ function orderBadge(order, total) {
         <div v-if="totalScore !== null" class="total-banner">
           <div class="total-score">{{ totalScore }}</div>
           <div class="total-label">总分 / {{ totalFull }}</div>
+          <div class="total-ranks" v-if="totalEntry">
+            <span v-if="totalEntry.classOrder" class="total-rank">
+              班<span :class="orderBadge(totalEntry.classOrder, 1)">{{ totalEntry.classOrder }}</span>
+            </span>
+            <span v-if="totalEntry.schoolOrder" class="total-rank">
+              校<span :class="orderBadge(totalEntry.schoolOrder, 1)">{{ totalEntry.schoolOrder }}</span>
+            </span>
+            <span v-if="totalEntry.unionOrder" class="total-rank">
+              联<span :class="orderBadge(totalEntry.unionOrder, 1)">{{ totalEntry.unionOrder }}</span>
+            </span>
+          </div>
         </div>
 
         <!-- Subject table -->
@@ -405,6 +416,16 @@ function orderBadge(order, total) {
                     <span class="rate-label">班级</span>
                     <div class="rate-bar"><div class="rate-fill rate-fill-class" :style="{ width: r.classScoreRate }"></div></div>
                     <span class="rate-val">{{ r.classScoreRate }}</span>
+                  </div>
+                  <div class="rate-bar-row">
+                    <span class="rate-label">学校</span>
+                    <div class="rate-bar"><div class="rate-fill rate-fill-school" :style="{ width: r.schoolScoreRate }"></div></div>
+                    <span class="rate-val">{{ r.schoolScoreRate || '-' }}</span>
+                  </div>
+                  <div class="rate-bar-row">
+                    <span class="rate-label">联考</span>
+                    <div class="rate-bar"><div class="rate-fill rate-fill-union" :style="{ width: r.unionScoreRate }"></div></div>
+                    <span class="rate-val">{{ r.unionScoreRate || '-' }}</span>
                   </div>
                 </div>
               </div>
@@ -785,6 +806,20 @@ function orderBadge(order, total) {
   color: rgba(255, 255, 255, 0.45);
 }
 
+.total-ranks {
+  display: flex;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.total-rank {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* ── Sections ── */
 .section {
   margin-bottom: 16px;
@@ -1002,6 +1037,14 @@ function orderBadge(order, total) {
 
 .rate-fill-class {
   background: rgba(52, 211, 153, 0.5);
+}
+
+.rate-fill-school {
+  background: rgba(251, 191, 36, 0.6);
+}
+
+.rate-fill-union {
+  background: rgba(244, 114, 182, 0.6);
 }
 
 .rate-val {
