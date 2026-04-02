@@ -195,6 +195,7 @@ const subjectRows = computed(() => {
 
 const totalScore = computed(() => totalEntry.value?.score ?? null)
 const totalFull = computed(() => totalEntry.value?.fullScore ?? null)
+const scoreGap = computed(() => totalData.value?.stuOrder?.scoreGap || null)
 
 function goBack() {
   if (phase.value === 'detail') {
@@ -336,6 +337,7 @@ function orderBadge(order, total) {
         <div v-if="totalScore !== null" class="total-banner">
           <div class="total-score">{{ totalScore }}</div>
           <div class="total-label">总分 / {{ totalFull }}</div>
+          <div v-if="totalEntry?.paperScore != null" class="total-label">卷面 {{ totalEntry.paperScore }}</div>
           <div class="total-ranks" v-if="totalEntry">
             <span v-if="totalEntry.classOrder" class="total-rank">
               班<span :class="orderBadge(totalEntry.classOrder, 1)">{{ totalEntry.classOrder }}</span>
@@ -356,6 +358,7 @@ function orderBadge(order, total) {
             <div class="score-row score-header">
               <span class="col-subject">科目</span>
               <span class="col-score">分数</span>
+              <span class="col-score">卷面</span>
               <span class="col-rank">班排名</span>
               <span class="col-rank">校排名</span>
               <span class="col-rank">联排名</span>
@@ -364,13 +367,14 @@ function orderBadge(order, total) {
               v-for="s in subjectRows"
               :key="s.name"
               class="score-row"
-              :class="{ clickable: true }"
+              :class="{ clickable: true, active: expandedSubject === (s.subjectid || s.id) }"
               @click="toggleSubject(s)"
             >
               <span class="col-subject">{{ s.name }}</span>
               <span class="col-score" :class="scoreColor(s.score, s.fullScore)">
                 {{ s.score }}<span class="score-full">/{{ s.fullScore }}</span>
               </span>
+              <span class="col-score" :class="scoreColor(s.paperScore, s.fullScore)">{{ s.paperScore }}</span>
               <span class="col-rank" :class="orderBadge(s.classOrder, 1)">
                 {{ s.classOrder || '-' }}
               </span>
@@ -380,6 +384,37 @@ function orderBadge(order, total) {
               <span class="col-rank" :class="orderBadge(s.unionOrder, 1)">
                 {{ s.unionOrder || '-' }}
               </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Score gap stats -->
+        <div v-if="scoreGap" class="section">
+          <div class="section-title">统计数据</div>
+          <div class="gap-table">
+            <div class="gap-row gap-header">
+              <span class="gap-col"></span>
+              <span class="gap-col">人数</span>
+              <span class="gap-col">最高分</span>
+              <span class="gap-col">平均分</span>
+            </div>
+            <div class="gap-row">
+              <span class="gap-col gap-label">班级</span>
+              <span class="gap-col">{{ scoreGap.classNum ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.classTop ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.classAvg ?? '-' }}</span>
+            </div>
+            <div class="gap-row">
+              <span class="gap-col gap-label">学校</span>
+              <span class="gap-col">{{ scoreGap.schoolNum ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.schoolTop ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.schoolAvg ?? '-' }}</span>
+            </div>
+            <div class="gap-row">
+              <span class="gap-col gap-label">联考</span>
+              <span class="gap-col">{{ scoreGap.unionNum ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.unionTop ?? '-' }}</span>
+              <span class="gap-col">{{ scoreGap.unionAvg ?? '-' }}</span>
             </div>
           </div>
         </div>
@@ -402,23 +437,32 @@ function orderBadge(order, total) {
             <div v-else class="no-data">暂无小题数据</div>
           </div>
 
-          <div v-if="subjectDetail" class="section">
-            <div class="section-title">难度分析</div>
-            <div class="difficulty-grid">
-              <div class="diff-card">
-                <div class="diff-label">简单题</div>
-                <div class="diff-value">{{ subjectDetail.loseScore1 || 0 }}分</div>
-                <div class="diff-sub">得分率 {{ subjectDetail.loseTotalRateScore1 || '-' }}</div>
+          <div v-if="subjectDetail?.stuOrder?.scoreGap" class="section">
+            <div class="section-title">统计数据</div>
+            <div class="gap-table">
+              <div class="gap-row gap-header">
+                <span class="gap-col"></span>
+                <span class="gap-col">人数</span>
+                <span class="gap-col">最高分</span>
+                <span class="gap-col">平均分</span>
               </div>
-              <div class="diff-card">
-                <div class="diff-label">中等题</div>
-                <div class="diff-value">{{ subjectDetail.loseScore2 || 0 }}分</div>
-                <div class="diff-sub">得分率 {{ subjectDetail.loseTotalRateScore2 || '-' }}</div>
+              <div class="gap-row">
+                <span class="gap-col gap-label">班级</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.classNum ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.classTop ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.classAvg ?? '-' }}</span>
               </div>
-              <div class="diff-card">
-                <div class="diff-label">难题</div>
-                <div class="diff-value">{{ subjectDetail.loseScore3 || 0 }}分</div>
-                <div class="diff-sub">得分率 {{ subjectDetail.loseTotalRateScore3 || '-' }}</div>
+              <div class="gap-row">
+                <span class="gap-col gap-label">学校</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.schoolNum ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.schoolTop ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.schoolAvg ?? '-' }}</span>
+              </div>
+              <div class="gap-row">
+                <span class="gap-col gap-label">联考</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.unionNum ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.unionTop ?? '-' }}</span>
+                <span class="gap-col">{{ subjectDetail.stuOrder.scoreGap.unionAvg ?? '-' }}</span>
               </div>
             </div>
           </div>
@@ -893,6 +937,11 @@ function orderBadge(order, total) {
   background: rgba(99, 102, 241, 0.1);
 }
 
+.score-row.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-left: 3px solid #6366f1;
+}
+
 .col-subject {
   flex: 1;
   color: rgba(255, 255, 255, 0.8);
@@ -921,6 +970,35 @@ function orderBadge(order, total) {
 .score-excellent { color: #34d399; }
 .score-pass { color: #fbbf24; }
 .score-fail { color: #f87171; }
+
+.gap-table {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.gap-row {
+  display: flex;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 13px;
+}
+.gap-row:last-child { border-bottom: none; }
+.gap-header {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.gap-col {
+  flex: 1;
+  text-align: center;
+  color: rgba(255,255,255,0.75);
+}
+.gap-label {
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+}
 
 .order-top { color: #34d399; font-weight: 600; }
 .order-good { color: #60a5fa; font-weight: 500; }
