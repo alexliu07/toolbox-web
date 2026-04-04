@@ -6,16 +6,24 @@ import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
 
 // 动态加载所有带 toolMeta 的工具组件（代码分割：按需加载）
-// import: 'toolMeta' 只导入命名导出，不加载组件主体，避免与 lazy glob 冲突
-const metaModules = import.meta.glob('./components/*.vue', { eager: true, import: 'toolMeta' })
+// 只用一个 lazy glob，异步读取 toolMeta 后构建工具注册表
 const lazyModules = import.meta.glob('./components/*.vue')
-const allTools = Object.entries(metaModules)
-  .filter(([_, meta]) => meta)
-  .map(([path, meta]) => ({
-    ...meta,
-    component: markRaw(defineAsyncComponent(lazyModules[path]))
-  }))
-  .sort((a, b) => a.order - b.order)
+const allTools = ref([])
+
+Promise.all(
+  Object.entries(lazyModules).map(async ([path, loader]) => {
+    const mod = await loader()
+    return mod.toolMeta ? { ...mod.toolMeta, loader } : null
+  })
+).then(entries => {
+  allTools.value = entries
+    .filter(Boolean)
+    .map(meta => ({
+      ...meta,
+      component: markRaw(defineAsyncComponent(meta.loader))
+    }))
+    .sort((a, b) => a.order - b.order)
+})
 
 // ── auth ──
 const {
@@ -43,7 +51,7 @@ const toolConfig = ref({})
 // 根据配置过滤启用的工具
 const tools = computed(() => {
   const cfg = toolConfig.value
-  return allTools.filter(tool => cfg[tool.id]?.enabled !== false)
+  return allTools.value.filter(tool => cfg[tool.id]?.enabled !== false)
 })
 
 // 加载外部配置
