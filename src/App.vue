@@ -6,12 +6,13 @@ import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
 
 // 动态加载所有带 toolMeta 的工具组件（代码分割：按需加载）
-const metaModules = import.meta.glob('./components/*.vue', { eager: true })
+// import: 'toolMeta' 只导入命名导出，不加载组件主体，避免与 lazy glob 冲突
+const metaModules = import.meta.glob('./components/*.vue', { eager: true, import: 'toolMeta' })
 const lazyModules = import.meta.glob('./components/*.vue')
 const allTools = Object.entries(metaModules)
-  .filter(([_, mod]) => mod.toolMeta)
-  .map(([path, mod]) => ({
-    ...mod.toolMeta,
+  .filter(([_, meta]) => meta)
+  .map(([path, meta]) => ({
+    ...meta,
     component: markRaw(defineAsyncComponent(lazyModules[path]))
   }))
   .sort((a, b) => a.order - b.order)
