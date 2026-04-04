@@ -1,15 +1,19 @@
 <script setup>
-import { ref, computed, markRaw, onMounted, onUnmounted, provide } from 'vue'
+import { ref, computed, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
 
-// 动态加载所有带 toolMeta 的工具组件
-const toolModules = import.meta.glob('./components/*.vue', { eager: true })
-const allTools = Object.values(toolModules)
-  .filter(mod => mod.toolMeta)
-  .map(mod => ({ ...mod.toolMeta, component: markRaw(mod.default) }))
+// 动态加载所有带 toolMeta 的工具组件（代码分割：按需加载）
+const metaModules = import.meta.glob('./components/*.vue', { eager: true })
+const lazyModules = import.meta.glob('./components/*.vue')
+const allTools = Object.entries(metaModules)
+  .filter(([_, mod]) => mod.toolMeta)
+  .map(([path, mod]) => ({
+    ...mod.toolMeta,
+    component: markRaw(defineAsyncComponent(lazyModules[path]))
+  }))
   .sort((a, b) => a.order - b.order)
 
 // ── auth ──
