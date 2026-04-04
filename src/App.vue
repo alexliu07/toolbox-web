@@ -7,7 +7,7 @@ import { useAuth }          from './composables/useAuth.js'
 
 // 动态加载所有带 toolMeta 的工具组件（代码分割：按需加载）
 // 只用一个 lazy glob，异步读取 toolMeta 后构建工具注册表
-const lazyModules = import.meta.glob('./components/*.vue')
+const lazyModules = import.meta.glob('./components/!(*Window|Auth*).vue')
 const allTools = ref([])
 
 Promise.all(
