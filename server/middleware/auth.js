@@ -14,6 +14,22 @@ function extractToken(req) {
 }
 
 /**
+ * Middleware: optional auth. If a valid token is present, attach req.user.
+ * Otherwise continue without error (req.user stays undefined).
+ */
+export function optionalAuth(req, res, next) {
+  const token = extractToken(req)
+  if (!token) return next()
+  try {
+    const record = getTokenRecord(token)
+    if (!record) return next()
+    const user = getUserById(record.user_id)
+    if (user) req.user = user
+  } catch {}
+  next()
+}
+
+/**
  * Middleware: require valid auth token.
  * Token can come from Authorization header OR ?token= query param.
  * Attaches req.user = { id, username, display_name } on success.

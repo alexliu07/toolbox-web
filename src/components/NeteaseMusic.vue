@@ -16,6 +16,7 @@ export const toolMeta = {
 import { ref, watch, onMounted, onUnmounted, nextTick, inject } from 'vue'
 
 const authFetch = inject('authFetch')
+const authToken = inject('authToken')
 
 const query = ref('')
 const songs = ref([])
@@ -29,6 +30,13 @@ const isPlaying = ref(false)
 const audioRef = ref(null)
 const savedVolume = ref(1)
 let applyingVolume = false
+
+// 登录状态
+const neteaseUser = ref(null) // { nickname, avatar_url } 或 null
+const showLogin = ref(false)
+const qrCode = ref('')
+const qrStatus = ref(null) // 'loading' | 'waiting' | 'scanned' | 'expired' | null
+let qrPollTimer = null
 
 // 音量持久化
 let volumeDebounce = null
@@ -60,17 +68,15 @@ function applyVolume() {
   if (!audioRef.value) return
   applyingVolume = true
   audioRef.value.volume = savedVolume.value
-  // reset after next tick to not block legitimate volume changes
   setTimeout(() => { applyingVolume = false }, 0)
 }
 
 // 歌词
 const showLyrics = ref(false)
-const lyrics = ref([])       // [{ time: number, text: string }]
+const lyrics = ref([])
 const currentTime = ref(0)
 const activeLyricIndex = ref(-1)
 const lyricsContainerRef = ref(null)
-let scrollTimer = null
 
 // 格式化时长 ms → mm:ss
 function formatDuration(ms) {
@@ -88,7 +94,7 @@ async function search() {
   loading.value = true
   searched.value = true
   try {
-    const res = await fetch(`/api/netease/search?keywords=${encodeURIComponent(q)}`)
+    const res = await authFetch(`/api/netease/search?keywords=${encodeURIComponent(q)}`)
     const data = await res.json()
     songs.value = data.songs || []
     songCount.value = data.songCount || 0
@@ -131,7 +137,7 @@ function onEnded() { isPlaying.value = false }
 // ── 歌词 ──
 async function fetchLyrics(id) {
   try {
-    const res = await fetch(`/api/netease/lyric?id=${id}`)
+    const res = await authFetch(`/api/netease/lyric?id=${id}`)
     const data = await res.json()
     lyrics.value = parseLRC(data.lrc || '')
   } catch (e) {
@@ -159,7 +165,6 @@ function parseLRC(lrcText) {
 function onTimeUpdate() {
   if (!audioRef.value) return
   currentTime.value = audioRef.value.currentTime
-  // 找到当前歌词行
   let idx = -1
   for (let i = lyrics.value.length - 1; i >= 0; i--) {
     if (currentTime.value >= lyrics.value[i].time) {
@@ -193,15 +198,96 @@ function seekToLyric(time) {
 
 function toggleLyrics() {
   showLyrics.value = !showLyrics.value
-  if (showLyrics.value) scrollToActiveLyric()
+  if (showLyrics.value) nextTick(() => scrollToActiveLyric())
 }
 
 function onSearchKeydown(e) {
   if (e.key === 'Enter') search()
 }
 
+// ── 登录 ──
+async function checkLoginStatus() {
+  try {
+    const res = await authFetch('/api/netease/login/status')
+    const data = await res.json()
+    if (data.loggedIn) {
+      neteaseUser.value = { nickname: data.nickname, avatar_url: data.avatar_url }
+    } else {
+      neteaseUser.value = null
+    }
+  } catch {
+    neteaseUser.value = null
+  }
+}
+
+async function startLogin() {
+  showLogin.value = true
+  qrCode.value = ''
+  qrStatus.value = 'loading'
+  clearInterval(qrPollTimer)
+
+  try {
+    // 1. 获取 unikey
+    const keyRes = await authFetch('/api/netease/qr/key')
+    const keyData = await keyRes.json()
+    if (!keyData.unikey) {
+      qrStatus.value = 'expired'
+      return
+    }
+
+    // 2. 生成 QR 码
+    const createRes = await authFetch(`/api/netease/qr/create?key=${encodeURIComponent(keyData.unikey)}`)
+    const createData = await createRes.json()
+    if (!createData.qrimg) {
+      qrStatus.value = 'expired'
+      return
+    }
+    qrCode.value = createData.qrimg
+    qrStatus.value = 'waiting'
+
+    // 3. 轮询状态
+    qrPollTimer = setInterval(async () => {
+      try {
+        const checkRes = await authFetch(`/api/netease/qr/check?key=${encodeURIComponent(keyData.unikey)}`)
+        const checkData = await checkRes.json()
+        if (checkData.code === 802) {
+          qrStatus.value = 'scanned'
+        } else if (checkData.code === 803) {
+          // 登录成功
+          clearInterval(qrPollTimer)
+          qrStatus.value = null
+          showLogin.value = false
+          await checkLoginStatus()
+        } else if (checkData.code === 800) {
+          // 过期
+          clearInterval(qrPollTimer)
+          qrStatus.value = 'expired'
+        }
+      } catch {
+        clearInterval(qrPollTimer)
+        qrStatus.value = 'expired'
+      }
+    }, 2000)
+  } catch {
+    qrStatus.value = 'expired'
+  }
+}
+
+function closeLogin() {
+  showLogin.value = false
+  clearInterval(qrPollTimer)
+}
+
+async function logout() {
+  try {
+    await authFetch('/api/netease/logout', { method: 'POST' })
+  } catch {}
+  neteaseUser.value = null
+}
+
 onMounted(() => {
   loadVolume()
+  checkLoginStatus()
 })
 
 onUnmounted(() => {
@@ -209,11 +295,35 @@ onUnmounted(() => {
     audioRef.value.pause()
     audioRef.value.src = ''
   }
+  clearInterval(qrPollTimer)
 })
 </script>
 
 <template>
   <div class="netease">
+    <!-- 登录覆盖层 -->
+    <transition name="lyrics-fade">
+      <div v-if="showLogin" class="login-overlay" @click.self="closeLogin()">
+        <div class="login-panel">
+          <div class="login-title">扫码登录网易云音乐</div>
+          <div class="qr-area">
+            <div v-if="qrStatus === 'loading'" class="qr-loading">正在获取二维码...</div>
+            <img v-else-if="qrCode && qrStatus !== 'expired'" :src="qrCode" class="qr-img" />
+            <div v-else-if="qrStatus === 'expired'" class="qr-expired">
+              <div class="qr-expired-text">二维码已过期</div>
+              <button class="qr-refresh-btn" @click="startLogin()">刷新</button>
+            </div>
+          </div>
+          <div class="qr-status-text">
+            <template v-if="qrStatus === 'waiting'">请使用网易云音乐 App 扫码</template>
+            <template v-else-if="qrStatus === 'scanned'">请在手机上确认登录</template>
+            <template v-else-if="qrStatus === 'expired'">二维码已过期，请刷新</template>
+          </div>
+          <button class="login-close-btn" @click="closeLogin()">取消</button>
+        </div>
+      </div>
+    </transition>
+
     <!-- 歌词全屏覆盖层 -->
     <transition name="lyrics-fade">
       <div v-if="showLyrics && currentSong" class="lyrics-overlay" @click="toggleLyrics()">
@@ -248,6 +358,16 @@ onUnmounted(() => {
       <button class="search-btn" @click="search()" :disabled="loading">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
+      <!-- 用户登录按钮/头像 -->
+      <div class="user-area">
+        <button v-if="!neteaseUser" class="login-btn" @click="startLogin()" title="登录网易云音乐">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </button>
+        <div v-else class="user-info" @click="logout()" title="点击退出登录">
+          <img v-if="neteaseUser.avatar_url" :src="neteaseUser.avatar_url" class="user-avatar" />
+          <span class="user-name">{{ neteaseUser.nickname }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- 搜索结果 -->
@@ -302,7 +422,7 @@ onUnmounted(() => {
       </div>
       <audio
         ref="audioRef"
-        :src="`/api/netease/stream?id=${currentSong.id}`"
+        :src="`/api/netease/stream?id=${currentSong.id}&token=${authToken}`"
         controls
         class="audio-player"
         @play="onPlay"
@@ -326,6 +446,108 @@ onUnmounted(() => {
   box-sizing: border-box;
   color: #e0e0e0;
   overflow: hidden;
+}
+
+/* ── 登录覆盖层 ── */
+.login-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  background: rgba(10, 12, 20, 0.95);
+  backdrop-filter: blur(20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  min-width: 280px;
+}
+
+.login-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.qr-area {
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.qr-img {
+  width: 200px;
+  height: 200px;
+}
+
+.qr-loading {
+  font-size: 14px;
+  color: #666;
+}
+
+.qr-expired {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.85);
+  position: absolute;
+  width: 200px;
+  height: 200px;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.qr-expired-text {
+  font-size: 14px;
+  color: #fff;
+}
+
+.qr-refresh-btn {
+  padding: 6px 20px;
+  background: rgba(225, 29, 72, 0.8);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.qr-refresh-btn:hover {
+  background: rgba(225, 29, 72, 1);
+}
+
+.qr-status-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.login-close-btn {
+  padding: 6px 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-close-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* ── 歌词覆盖层 ── */
@@ -432,6 +654,7 @@ onUnmounted(() => {
   gap: 8px;
   margin-bottom: 12px;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .search-input {
@@ -477,6 +700,61 @@ onUnmounted(() => {
 .search-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── 用户区域 ── */
+.user-area {
+  flex-shrink: 0;
+}
+
+.login-btn {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.login-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.user-info:hover {
+  background: rgba(225, 29, 72, 0.2);
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+.user-name {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── 搜索结果 ── */

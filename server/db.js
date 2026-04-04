@@ -100,6 +100,20 @@ export async function initDatabase() {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_netease_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      cookies TEXT NOT NULL,
+      netease_uid INTEGER,
+      nickname TEXT,
+      avatar_url TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id)
+    )
+  `)
+
   // Save to disk
   saveDatabase()
 
@@ -334,6 +348,38 @@ export function saveUserDrawing(userId, name, data) {
 
 export function deleteUserDrawing(userId, name) {
   db.run('DELETE FROM user_drawings WHERE user_id = ? AND name = ?', [userId, name])
+  saveDatabase()
+}
+
+// ── Netease credentials operations ──
+
+export function getNeteaseCredentials(userId) {
+  const stmt = db.prepare('SELECT cookies, netease_uid, nickname, avatar_url FROM user_netease_credentials WHERE user_id = ?')
+  stmt.bind([userId])
+  let cred = null
+  if (stmt.step()) {
+    const row = stmt.getAsObject()
+    cred = {
+      cookies: JSON.parse(row.cookies),
+      netease_uid: row.netease_uid,
+      nickname: row.nickname,
+      avatar_url: row.avatar_url,
+    }
+  }
+  stmt.free()
+  return cred
+}
+
+export function saveNeteaseCredentials(userId, { cookies, netease_uid, nickname, avatar_url }) {
+  db.run(
+    "INSERT OR REPLACE INTO user_netease_credentials (user_id, cookies, netease_uid, nickname, avatar_url, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+    [userId, JSON.stringify(cookies), netease_uid || null, nickname || null, avatar_url || null]
+  )
+  saveDatabase()
+}
+
+export function deleteNeteaseCredentials(userId) {
+  db.run('DELETE FROM user_netease_credentials WHERE user_id = ?', [userId])
   saveDatabase()
 }
 

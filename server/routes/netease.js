@@ -1,4 +1,6 @@
 import express from 'express'
+import { requireAuth, optionalAuth } from '../middleware/auth.js'
+import { getNeteaseCredentials, saveNeteaseCredentials, deleteNeteaseCredentials } from '../db.js'
 
 const router = express.Router()
 
@@ -10,13 +12,122 @@ try {
   console.error('[netease] Failed to load NeteaseCloudMusicApi:', e.message)
 }
 
+// Helper: get cookies string for a user, or undefined if not logged in
+function getCookies(userId) {
+  if (!userId) return undefined
+  try {
+    const cred = getNeteaseCredentials(userId)
+    if (!cred?.cookies) return undefined
+    // cookies stored as string[], API expects '; '-joined string
+    return Array.isArray(cred.cookies) ? cred.cookies.join('; ') : cred.cookies
+  } catch {
+    return undefined
+  }
+}
+
+// ── Login endpoints ──
+
+// GET /api/netease/qr/key — get QR code unikey
+router.get('/qr/key', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  try {
+    const result = await api.login_qr_key()
+    const body = result.body || result
+    if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
+    res.json({ unikey: body.data.unikey })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /api/netease/qr/create?key=xxx — generate QR code base64 image
+router.get('/qr/create', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  const { key } = req.query
+  if (!key) return res.status(400).json({ error: 'key required' })
+  try {
+    const result = await api.login_qr_create({ key, qrimg: true })
+    const body = result.body || result
+    if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
+    res.json({ qrimg: body.data.qrimg })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /api/netease/qr/check?key=xxx — poll QR scan status
+router.get('/qr/check', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  const { key } = req.query
+  if (!key) return res.status(400).json({ error: 'key required' })
+  try {
+    const result = await api.login_qr_check({ key })
+    const body = result.body || result
+    // 800=expired, 801=waiting, 802=scanned/confirmed, 803=success
+    if (body.code === 803) {
+      // Login success — extract cookies from response
+      const cookieArr = result.cookie || body.cookie || []
+      // Get user account info
+      let neteaseUid = null, nickname = null, avatarUrl = null
+      try {
+        const cookieStr = Array.isArray(cookieArr) ? cookieArr.join('; ') : cookieArr
+        const accountRes = await api.user_account({ cookie: cookieStr })
+        const accountBody = accountRes.body || accountRes
+        if (accountBody.code === 200 && accountBody.profile) {
+          neteaseUid = accountBody.profile.userId
+          nickname = accountBody.profile.nickname
+          avatarUrl = accountBody.profile.avatarUrl
+        }
+      } catch {}
+      saveNeteaseCredentials(req.user.id, {
+        cookies: cookieArr,
+        netease_uid: neteaseUid,
+        nickname,
+        avatar_url: avatarUrl,
+      })
+    }
+    res.json({ code: body.code, message: body.message })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /api/netease/login/status — check current login status
+router.get('/login/status', requireAuth, (req, res) => {
+  try {
+    const cred = getNeteaseCredentials(req.user.id)
+    if (!cred) return res.json({ loggedIn: false })
+    res.json({
+      loggedIn: true,
+      netease_uid: cred.netease_uid,
+      nickname: cred.nickname,
+      avatar_url: cred.avatar_url,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/netease/logout — logout from Netease
+router.post('/logout', requireAuth, (req, res) => {
+  try {
+    deleteNeteaseCredentials(req.user.id)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Music endpoints ──
+
 // GET /api/netease/search — 搜索歌曲
-router.get('/search', async (req, res) => {
+router.get('/search', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
   const { keywords, limit = 30, offset = 0 } = req.query
   if (!keywords) return res.status(400).json({ error: 'keywords required' })
   try {
-    const result = await api.search({ keywords, type: 1, limit: Number(limit), offset: Number(offset) })
+    const cookie = getCookies(req.user?.id)
+    const result = await api.search({ keywords, type: 1, limit: Number(limit), offset: Number(offset), cookie })
     const body = result.body || result
     if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
     const songs = (body.result?.songs || []).map(s => ({
@@ -24,8 +135,8 @@ router.get('/search', async (req, res) => {
       name: s.name,
       artists: s.artists?.map(a => a.name).join(' / ') || '',
       album: s.album?.name || '',
-      duration: s.duration, // ms
-      fee: s.fee, // 0=free, 1=VIP, 4=purchase album, 8=non-member low quality, member high quality
+      duration: s.duration,
+      fee: s.fee,
     }))
     res.json({ songs, songCount: body.result?.songCount || 0 })
   } catch (e) {
@@ -34,12 +145,13 @@ router.get('/search', async (req, res) => {
 })
 
 // GET /api/netease/url — 获取歌曲播放 URL
-router.get('/url', async (req, res) => {
+router.get('/url', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
   const { id } = req.query
   if (!id) return res.status(400).json({ error: 'id required' })
   try {
-    const result = await api.song_url({ id: Number(id) })
+    const cookie = getCookies(req.user?.id)
+    const result = await api.song_url({ id: Number(id), cookie })
     const body = result.body || result
     const song = body.data?.[0]
     if (!song?.url) return res.status(404).json({ error: 'no url available' })
@@ -50,14 +162,14 @@ router.get('/url', async (req, res) => {
 })
 
 // GET /api/netease/stream — 音频流代理
-router.get('/stream', async (req, res) => {
+router.get('/stream', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
   const { id } = req.query
   if (!id) return res.status(400).json({ error: 'id required' })
 
   try {
-    // 获取歌曲 URL
-    const result = await api.song_url({ id: Number(id) })
+    const cookie = getCookies(req.user?.id)
+    const result = await api.song_url({ id: Number(id), cookie })
     const body = result.body || result
     const song = body.data?.[0]
     if (!song?.url) return res.status(404).json({ error: 'no url available' })
@@ -102,12 +214,13 @@ router.get('/stream', async (req, res) => {
 })
 
 // GET /api/netease/lyric — 获取歌词
-router.get('/lyric', async (req, res) => {
+router.get('/lyric', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
   const { id } = req.query
   if (!id) return res.status(400).json({ error: 'id required' })
   try {
-    const result = await api.lyric({ id: Number(id) })
+    const cookie = getCookies(req.user?.id)
+    const result = await api.lyric({ id: Number(id), cookie })
     const body = result.body || result
     res.json({
       lrc: body.lrc?.lyric || '',
