@@ -1,29 +1,25 @@
 <script setup>
-import { ref, computed, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
+import { ref, computed, shallowRef, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
 
-// 动态加载所有带 toolMeta 的工具组件（代码分割：按需加载）
-// 只用一个 lazy glob，异步读取 toolMeta 后构建工具注册表
-const lazyModules = import.meta.glob('./components/!(*Window|Auth*).vue')
-const allTools = ref([])
+// 加载所有 .meta.js 纯数据文件（每个 ~100B，总量极小），组件按需加载
+const metaModules = import.meta.glob('./components/*.meta.js', { eager: true })
+const componentLoaderMap = import.meta.glob('./components/!(*Window|Auth*|*.meta).vue')
 
-Promise.all(
-  Object.entries(lazyModules).map(async ([path, loader]) => {
-    const mod = await loader()
-    return mod.toolMeta ? { ...mod.toolMeta, loader } : null
+const allTools = Object.entries(metaModules)
+  .map(([path, mod]) => {
+    const componentName = path.replace('./components/', '').replace('.meta.js', '')
+    const vueLoader = componentLoaderMap[`./components/${componentName}.vue`]
+    return { ...mod.default, loader: vueLoader }
   })
-).then(entries => {
-  allTools.value = entries
-    .filter(Boolean)
-    .map(meta => ({
-      ...meta,
-      component: markRaw(defineAsyncComponent(meta.loader))
-    }))
-    .sort((a, b) => a.order - b.order)
-})
+  .filter(t => t.loader)
+  .sort((a, b) => a.order - b.order)
+
+// 组件缓存：首次打开时动态 import，之后复用
+const componentCache = new Map()
 
 // ── auth ──
 const {
@@ -51,7 +47,7 @@ const toolConfig = ref({})
 // 根据配置过滤启用的工具
 const tools = computed(() => {
   const cfg = toolConfig.value
-  return allTools.value.filter(tool => cfg[tool.id]?.enabled !== false)
+  return allTools.filter(tool => cfg[tool.id]?.enabled !== false)
 })
 
 // 加载外部配置
@@ -76,10 +72,16 @@ const {
 } = useWindowManager()
 
 function openTool(tool) {
+  // 按需加载组件：首次打开时动态 import，之后从缓存读取
+  let component = componentCache.get(tool.id)
+  if (!component) {
+    component = markRaw(defineAsyncComponent(tool.loader))
+    componentCache.set(tool.id, component)
+  }
   openWindow({
     title: tool.windowTitle, icon: tool.windowIcon,
     width: tool.width, height: tool.height,
-    component: tool.component,
+    component,
     singletonKey: tool.id,
   })
 }
