@@ -93,24 +93,67 @@ router.get('/qr/check', requireAuth, async (req, res) => {
 })
 
 // GET /api/netease/login/status — check current login status
-router.get('/login/status', requireAuth, (req, res) => {
+router.get('/login/status', requireAuth, async (req, res) => {
   try {
     const cred = getNeteaseCredentials(req.user.id)
     if (!cred) return res.json({ loggedIn: false })
-    res.json({
-      loggedIn: true,
-      netease_uid: cred.netease_uid,
-      nickname: cred.nickname,
-      avatar_url: cred.avatar_url,
-    })
+
+    // 调用网易云 API 验证 cookie 是否仍然有效
+    try {
+      const cookie = Array.isArray(cred.cookies) ? cred.cookies.join('; ') : cred.cookies
+      const accountRes = await api.user_account({ cookie })
+      const accountBody = accountRes.body || accountRes
+      if (accountBody.code === 200 && accountBody.profile) {
+        // cookie 有效，返回最新用户信息
+        const profile = accountBody.profile
+        // 如果用户信息有变化，更新数据库
+        if (profile.userId !== cred.netease_uid || profile.nickname !== cred.nickname || profile.avatarUrl !== cred.avatar_url) {
+          saveNeteaseCredentials(req.user.id, {
+            cookies: cred.cookies,
+            netease_uid: profile.userId,
+            nickname: profile.nickname,
+            avatar_url: profile.avatarUrl,
+          })
+        }
+        return res.json({
+          loggedIn: true,
+          netease_uid: profile.userId,
+          nickname: profile.nickname,
+          avatar_url: profile.avatarUrl,
+        })
+      }
+      // cookie 已失效（code 非 200 或无 profile）
+      deleteNeteaseCredentials(req.user.id)
+      return res.json({ loggedIn: false })
+    } catch (apiErr) {
+      // API 调用失败，降级使用本地数据
+      console.warn('[netease] login/status upstream check failed, falling back to local:', apiErr.message)
+      return res.json({
+        loggedIn: true,
+        netease_uid: cred.netease_uid,
+        nickname: cred.nickname,
+        avatar_url: cred.avatar_url,
+      })
+    }
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
 // POST /api/netease/logout — logout from Netease
-router.post('/logout', requireAuth, (req, res) => {
+router.post('/logout', requireAuth, async (req, res) => {
   try {
+    // 先调用网易云 API 登出，清除服务端 session
+    try {
+      const cred = getNeteaseCredentials(req.user.id)
+      if (cred?.cookies) {
+        const cookie = Array.isArray(cred.cookies) ? cred.cookies.join('; ') : cred.cookies
+        await api.logout({ cookie })
+      }
+    } catch (apiErr) {
+      console.warn('[netease] logout upstream call failed:', apiErr.message)
+    }
+    // 无论 API 调用是否成功，都删除本地凭证
     deleteNeteaseCredentials(req.user.id)
     res.json({ ok: true })
   } catch (e) {
