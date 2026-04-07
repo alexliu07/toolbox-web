@@ -12,13 +12,14 @@ const componentLoaderMap = import.meta.glob('./components/!(*Window|Auth*|*.meta
 const allTools = Object.entries(metaModules)
   .map(([path, mod]) => {
     const componentName = path.replace('./components/', '').replace('.meta.js', '')
-    const vueLoader = componentLoaderMap[`./components/${componentName}.vue`]
-    return { ...mod.default, loader: vueLoader }
+    const vuePath = `./components/${componentName}.vue`
+    const vueLoader = componentLoaderMap[vuePath]
+    return { ...mod.default, loader: vueLoader, componentName }
   })
   .filter(t => t.loader)
   .sort((a, b) => a.order - b.order)
 
-// 组件缓存：首次打开时动态 import，之后复用
+// 组件缓存：首次打开时动态 import，之后复用；加载失败时不缓存以便重试
 const componentCache = new Map()
 
 // ── auth ──
@@ -75,7 +76,13 @@ function openTool(tool) {
   // 按需加载组件：首次打开时动态 import，之后从缓存读取
   let component = componentCache.get(tool.id)
   if (!component) {
-    component = markRaw(defineAsyncComponent(tool.loader))
+    component = markRaw(defineAsyncComponent(() =>
+      tool.loader().catch(() => {
+        // 加载失败（如断网）：清除缓存，用 fresh 时间戳 bust 浏览器对失败 URL 的缓存
+        componentCache.delete(tool.id)
+        return import(/* @vite-ignore */ `/src/components/${tool.componentName}.vue?t=${Date.now()}`)
+      })
+    ))
     componentCache.set(tool.id, component)
   }
   openWindow({
