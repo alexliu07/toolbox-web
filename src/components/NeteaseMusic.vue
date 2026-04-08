@@ -60,6 +60,7 @@ function applyVolume() {
 // 歌词
 const showLyrics = ref(false)
 const lyrics = ref([])
+const tlyrics = ref([])
 const currentTime = ref(0)
 const activeLyricIndex = ref(-1)
 const lyricsContainerRef = ref(null)
@@ -107,6 +108,7 @@ function playSong(song) {
   currentSong.value = song
   showLyrics.value = false
   lyrics.value = []
+  tlyrics.value = []
   activeLyricIndex.value = -1
   fetchLyrics(song.id)
   setTimeout(() => {
@@ -126,8 +128,10 @@ async function fetchLyrics(id) {
     const res = await authFetch(`/api/netease/lyric?id=${id}`)
     const data = await res.json()
     lyrics.value = parseLRC(data.lrc || '')
+    tlyrics.value = parseLRC(data.tlyric || '')
   } catch (e) {
     lyrics.value = []
+    tlyrics.value = []
   }
 }
 
@@ -150,6 +154,18 @@ function parseLRC(lrcText) {
     if (text) result.push({ time, text })
   }
   return result
+}
+
+function getTlyricText(time) {
+  if (!tlyrics.value.length) return ''
+  let lo = 0, hi = tlyrics.value.length - 1, best = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (tlyrics.value[mid].time <= time) { best = mid; lo = mid + 1 }
+    else { hi = mid - 1 }
+  }
+  if (best >= 0 && time - tlyrics.value[best].time < 1) return tlyrics.value[best].text
+  return ''
 }
 
 function onTimeUpdate() {
@@ -329,7 +345,7 @@ onUnmounted(() => {
             class="lyric-line"
             :class="{ active: i === activeLyricIndex }"
             @click="seekToLyric(line.time)"
-          >{{ line.text }}</div>
+          >{{ line.text }}<div v-if="getTlyricText(line.time)" class="lyric-translation">{{ getTlyricText(line.time) }}</div></div>
         </div>
         <div class="lyrics-hint">点击歌词跳转 · 点击空白处返回</div>
       </div>
@@ -622,6 +638,17 @@ onUnmounted(() => {
   font-size: 18px;
   font-weight: 600;
   transform: scale(1.05);
+}
+
+.lyric-translation {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.25);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.lyric-line.active .lyric-translation {
+  color: rgba(244, 63, 94, 0.55);
 }
 
 .lyrics-empty {
