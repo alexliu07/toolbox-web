@@ -452,7 +452,7 @@ onUnmounted(() => {
             @click="seekToLyric(line.time)"
           >{{ line.text }}<div v-if="getTlyricText(line.time)" class="lyric-translation">{{ getTlyricText(line.time) }}</div></div>
         </div>
-        <div class="lyrics-hint">点击歌词跳转 · 点击空白处返回</div>
+        <div class="lyrics-hint">点击歌词跳转 · 点击空白处或歌名返回</div>
       </div>
     </transition>
 
@@ -517,7 +517,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 搜索结果 -->
-    <div class="results" :class="{ 'has-player': currentSong }">
+    <div class="results">
       <div v-if="loading" class="loading">搜索中...</div>
 
       <template v-if="!loading && songs.length">
@@ -561,7 +561,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 播放控制栏 -->
-    <div v-if="currentSong" class="player-bar">
+    <div class="player-bar">
       <button class="player-side-btn" @click="cyclePlayMode()" :title="{sequence:'顺序播放',loop:'列表循环',single:'单曲循环',shuffle:'随机播放'}[playMode]">
         <!-- 顺序播放 -->
         <svg v-if="playMode === 'sequence'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="8" x2="19" y2="8"/><polyline points="14 3 19 8 14 13"/><line x1="5" y1="16" x2="19" y2="16"/><polyline points="14 11 19 16 14 21"/></svg>
@@ -572,22 +572,25 @@ onUnmounted(() => {
         <!-- 随机播放 -->
         <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
       </button>
-      <div class="player-info">
-        <div class="player-song-name" @click="toggleLyrics()" title="查看歌词">{{ currentSong.name }}</div>
-        <div class="player-artist">{{ currentSong.artists }}</div>
-      </div>
-      <audio
-        ref="audioRef"
-        :src="`/api/netease/stream?id=${currentSong.id}&token=${authToken}`"
-        controls
-        class="audio-player"
-        @play="onPlay"
-        @pause="onPause"
-        @ended="onEnded"
-        @timeupdate="onTimeUpdate"
-        @volumechange="onVolumeChange"
-        @loadedmetadata="applyVolume"
-      />
+      <template v-if="currentSong">
+        <div class="player-info">
+          <div class="player-song-name" @click="toggleLyrics()" :title="showLyrics ? '关闭歌词' : '查看歌词'">{{ currentSong.name }}</div>
+          <div class="player-artist">{{ currentSong.artists }}</div>
+        </div>
+        <audio
+          ref="audioRef"
+          :src="`/api/netease/stream?id=${currentSong.id}&token=${authToken}`"
+          controls
+          class="audio-player"
+          @play="onPlay"
+          @pause="onPause"
+          @ended="onEnded"
+          @timeupdate="onTimeUpdate"
+          @volumechange="onVolumeChange"
+          @loadedmetadata="applyVolume"
+        />
+      </template>
+      <div v-else class="player-empty">未在播放</div>
       <button class="player-side-btn" @click="showPlaylist = !showPlaylist" :class="{ active: showPlaylist }" title="播放列表">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         <span v-if="playlist.length" class="playlist-badge">{{ playlist.length }}</span>
@@ -714,6 +717,7 @@ onUnmounted(() => {
 .lyrics-overlay {
   position: absolute;
   inset: 0;
+  bottom: 58px;
   z-index: 100;
   background: rgba(10, 12, 20, 0.97);
   backdrop-filter: blur(20px);
@@ -933,11 +937,8 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding-right: 4px;
-  min-height: 0;
-}
-
-.results.has-player {
   padding-bottom: 80px;
+  min-height: 0;
 }
 
 .results::-webkit-scrollbar {
@@ -1137,6 +1138,13 @@ onUnmounted(() => {
   flex: 1;
   height: 36px;
   min-width: 0;
+}
+
+.player-empty {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.3);
 }
 
 .player-side-btn {
