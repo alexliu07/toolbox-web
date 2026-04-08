@@ -134,13 +134,17 @@ async function fetchLyrics(id) {
 function parseLRC(lrcText) {
   const lines = lrcText.split('\n')
   const result = []
-  const timeReg = /\[(\d{2}):(\d{2})\.(\d{1,3})\]/
+  const timeReg = /\[(\d{2}):(\d{2})[.:](\d{1,3})\]/
   for (const line of lines) {
     const match = timeReg.exec(line)
     if (!match) continue
     const min = parseInt(match[1])
     const sec = parseInt(match[2])
-    const ms = parseInt(match[3].padEnd(3, '0'))
+    const frac = match[3].padEnd(3, '0')
+    // [mm:ss:ff] 冒号分隔时 ff 是百分秒，[mm:ss.xxx] 点号分隔时是毫秒
+    const ms = match[3].length === 2 && line[5] === ':'
+      ? parseInt(frac) * 10
+      : parseInt(frac)
     const time = min * 60 + sec + ms / 1000
     const text = line.replace(/\[.*?\]/g, '').trim()
     if (text) result.push({ time, text })
