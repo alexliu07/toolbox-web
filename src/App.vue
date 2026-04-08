@@ -573,7 +573,6 @@ onUnmounted(() => clearInterval(timer))
 }
 
 .taskbar-item--minimized .taskbar-title {
-  text-decoration: line-through;
   opacity: 0.7;
 }
 
