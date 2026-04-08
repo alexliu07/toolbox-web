@@ -134,7 +134,7 @@ async function fetchLyrics(id) {
 function parseLRC(lrcText) {
   const lines = lrcText.split('\n')
   const result = []
-  const timeReg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/
+  const timeReg = /\[(\d{2}):(\d{2})\.(\d{1,3})\]/
   for (const line of lines) {
     const match = timeReg.exec(line)
     if (!match) continue
