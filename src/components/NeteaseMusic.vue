@@ -57,6 +57,35 @@ function applyVolume() {
   setTimeout(() => { applyingVolume = false }, 0)
 }
 
+// 播放列表持久化
+let playlistDebounce = null
+function loadPlaylist() {
+  authFetch('/api/data/netease-playlist').then(r => r.json()).then(data => {
+    if (Array.isArray(data?.playlist)) playlist.value = data.playlist
+    if (typeof data?.playlistIndex === 'number') playlistIndex.value = data.playlistIndex
+    if (data?.playMode) playMode.value = data.playMode
+  }).catch(() => {})
+}
+function savePlaylist() {
+  clearTimeout(playlistDebounce)
+  playlistDebounce = setTimeout(() => {
+    authFetch('/api/data/netease-playlist', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        playlist: playlist.value,
+        playlistIndex: playlistIndex.value,
+        playMode: playMode.value,
+      }),
+    }).catch(() => {})
+  }, 500)
+}
+function cyclePlayMode() {
+  const modes = ['sequence', 'loop', 'single', 'shuffle']
+  playMode.value = modes[(modes.indexOf(playMode.value) + 1) % modes.length]
+  savePlaylist()
+}
+
 // 歌词
 const showLyrics = ref(false)
 const lyrics = ref([])
@@ -64,6 +93,12 @@ const tlyrics = ref([])
 const currentTime = ref(0)
 const activeLyricIndex = ref(-1)
 const lyricsContainerRef = ref(null)
+
+// 播放列表
+const playlist = ref([]) // [{ id, name, artists, album, duration, fee }]
+const playlistIndex = ref(-1)
+const playMode = ref('sequence') // 'sequence' | 'loop' | 'single' | 'shuffle'
+const showPlaylist = ref(false)
 
 // 格式化时长 ms → mm:ss
 function formatDuration(ms) {
@@ -105,6 +140,27 @@ function playSong(song) {
     return
   }
 
+  // 加入播放列表
+  const idx = playlist.value.findIndex(s => s.id === song.id)
+  if (idx >= 0) {
+    playlistIndex.value = idx
+  } else {
+    const item = { id: song.id, name: song.name, artists: song.artists, album: song.album, duration: song.duration, fee: song.fee }
+    playlist.value.push(item)
+    playlistIndex.value = playlist.value.length - 1
+  }
+  savePlaylist()
+  activateSong(song)
+}
+
+function playSongAt(index) {
+  if (index < 0 || index >= playlist.value.length) return
+  playlistIndex.value = index
+  savePlaylist()
+  activateSong(playlist.value[index])
+}
+
+function activateSong(song) {
   currentSong.value = song
   showLyrics.value = false
   lyrics.value = []
@@ -118,9 +174,57 @@ function playSong(song) {
   }, 50)
 }
 
+function removeFromPlaylist(index) {
+  playlist.value.splice(index, 1)
+  if (index < playlistIndex.value) {
+    playlistIndex.value--
+  } else if (index === playlistIndex.value) {
+    if (playlist.value.length === 0) {
+      playlistIndex.value = -1
+      currentSong.value = null
+      isPlaying.value = false
+    } else {
+      const next = Math.min(index, playlist.value.length - 1)
+      playSongAt(next)
+    }
+  }
+  savePlaylist()
+}
+
+function nextSong() {
+  if (!playlist.value.length) return
+  if (playMode.value === 'single') {
+    if (audioRef.value) {
+      audioRef.value.currentTime = 0
+      audioRef.value.play().catch(() => {})
+    }
+    return
+  }
+  if (playMode.value === 'shuffle') {
+    if (playlist.value.length === 1) {
+      playSongAt(0)
+    } else {
+      let idx
+      do { idx = Math.floor(Math.random() * playlist.value.length) } while (idx === playlistIndex.value)
+      playSongAt(idx)
+    }
+    return
+  }
+  // sequence / loop
+  const next = playlistIndex.value + 1
+  if (next < playlist.value.length) {
+    playSongAt(next)
+  } else if (playMode.value === 'loop') {
+    playSongAt(0)
+  }
+}
+
 function onPlay() { isPlaying.value = true }
 function onPause() { isPlaying.value = false }
-function onEnded() { isPlaying.value = false }
+function onEnded() {
+  isPlaying.value = false
+  nextSong()
+}
 
 // ── 歌词 ──
 async function fetchLyrics(id) {
@@ -293,6 +397,7 @@ async function logout() {
 
 onMounted(() => {
   loadVolume()
+  loadPlaylist()
   checkLoginStatus()
 })
 
@@ -348,6 +453,41 @@ onUnmounted(() => {
           >{{ line.text }}<div v-if="getTlyricText(line.time)" class="lyric-translation">{{ getTlyricText(line.time) }}</div></div>
         </div>
         <div class="lyrics-hint">点击歌词跳转 · 点击空白处返回</div>
+      </div>
+    </transition>
+
+    <!-- 播放列表覆盖层 -->
+    <transition name="lyrics-fade">
+      <div v-if="showPlaylist" class="playlist-overlay" @click.self="showPlaylist = false">
+        <div class="playlist-panel">
+          <div class="playlist-header">
+            <span class="playlist-title">播放列表</span>
+            <span class="playlist-count">{{ playlist.length }} 首歌曲</span>
+          </div>
+          <div class="playlist-body">
+            <div v-if="!playlist.length" class="playlist-empty">播放列表为空</div>
+            <div
+              v-for="(song, i) in playlist"
+              :key="song.id"
+              class="playlist-item"
+              :class="{ active: i === playlistIndex }"
+              @click="playSongAt(i)"
+            >
+              <div class="playlist-item-name">
+                <span class="play-indicator">
+                  <svg v-if="i === playlistIndex && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </span>
+                {{ song.name }}
+              </div>
+              <span class="playlist-item-artist">{{ song.artists }}</span>
+              <span class="playlist-item-duration">{{ formatDuration(song.duration) }}</span>
+              <button class="playlist-item-remove" @click.stop="removeFromPlaylist(i)" title="移除">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </transition>
 
@@ -422,6 +562,16 @@ onUnmounted(() => {
 
     <!-- 播放控制栏 -->
     <div v-if="currentSong" class="player-bar">
+      <button class="player-side-btn" @click="cyclePlayMode()" :title="{sequence:'顺序播放',loop:'列表循环',single:'单曲循环',shuffle:'随机播放'}[playMode]">
+        <!-- 顺序播放 -->
+        <svg v-if="playMode === 'sequence'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="8" x2="19" y2="8"/><polyline points="14 3 19 8 14 13"/><line x1="5" y1="16" x2="19" y2="16"/><polyline points="14 11 19 16 14 21"/></svg>
+        <!-- 列表循环 -->
+        <svg v-else-if="playMode === 'loop'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/><text x="12" y="15" text-anchor="middle" font-size="8" fill="currentColor" stroke="none" font-weight="bold">&#x221e;</text></svg>
+        <!-- 单曲循环 -->
+        <svg v-else-if="playMode === 'single'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/><text x="12" y="15" text-anchor="middle" font-size="8" fill="currentColor" stroke="none" font-weight="bold">1</text></svg>
+        <!-- 随机播放 -->
+        <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+      </button>
       <div class="player-info">
         <div class="player-song-name" @click="toggleLyrics()" title="查看歌词">{{ currentSong.name }}</div>
         <div class="player-artist">{{ currentSong.artists }}</div>
@@ -438,6 +588,10 @@ onUnmounted(() => {
         @volumechange="onVolumeChange"
         @loadedmetadata="applyVolume"
       />
+      <button class="player-side-btn" @click="showPlaylist = !showPlaylist" :class="{ active: showPlaylist }" title="播放列表">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span v-if="playlist.length" class="playlist-badge">{{ playlist.length }}</span>
+      </button>
     </div>
   </div>
 </template>
@@ -983,5 +1137,187 @@ onUnmounted(() => {
   flex: 1;
   height: 36px;
   min-width: 0;
+}
+
+.player-side-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.player-side-btn:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.player-side-btn.active {
+  color: #f43f5e;
+  border-color: rgba(225, 29, 72, 0.4);
+}
+
+.playlist-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: #f43f5e;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* ── 播放列表覆盖层 ── */
+.playlist-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 150;
+  background: rgba(10, 12, 20, 0.85);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.playlist-panel {
+  width: 90%;
+  max-width: 500px;
+  max-height: 80%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.playlist-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.playlist-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.playlist-count {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.playlist-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.playlist-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.playlist-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.playlist-empty {
+  text-align: center;
+  padding: 40px;
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 14px;
+}
+
+.playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.playlist-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.playlist-item.active {
+  background: rgba(225, 29, 72, 0.15);
+}
+
+.playlist-item.active .playlist-item-name {
+  color: #f43f5e;
+}
+
+.playlist-item-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #fff;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-item-artist {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-item-duration {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.3);
+  font-variant-numeric: tabular-nums;
+}
+
+.playlist-item-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.playlist-item-remove:hover {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.15);
 }
 </style>
