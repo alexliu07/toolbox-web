@@ -162,7 +162,6 @@ function playSongAt(index) {
 
 function activateSong(song) {
   currentSong.value = song
-  showLyrics.value = false
   lyrics.value = []
   tlyrics.value = []
   activeLyricIndex.value = -1
