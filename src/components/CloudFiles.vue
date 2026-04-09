@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, onErrorCaptured, inject, markRaw } from 'vue'
-import FileViewer   from './FileViewer.vue'
+import { ref, computed, onMounted, onErrorCaptured, inject, markRaw, defineAsyncComponent } from 'vue'
+import FileViewer from './FileViewer.vue'
 
-const FileViewerRaw   = markRaw(FileViewer)
+const FileViewerRaw = markRaw(FileViewer)
+const WordViewerRaw = markRaw(defineAsyncComponent(() => import('./WordViewer.vue')))
 
 // ── state ──
 const openWindow   = inject('openWindow')
@@ -17,6 +18,16 @@ function mimeToIcon(mime) {
   if (mime?.startsWith('audio/')) return '🎵'
   if (mime?.startsWith('text/'))  return '📝'
   return '📄'
+}
+
+function openWordViewer(fileUrl, fileName) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  openWindow({
+    title: shortName,
+    icon: '📝', width: 900, height: 720,
+    component: WordViewerRaw,
+    props: { fileUrl, fileName: shortName },
+  })
 }
 
 function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
@@ -115,6 +126,11 @@ function fileTypeIcon(mime, type) {
   return '📄'
 }
 
+
+function isWord(mime) {
+  if (!mime) return false
+  return mime.includes('wordprocessingml') || mime === 'application/msword'
+}
 
 function isImage(mime) { return mime && mime.startsWith('image/') }
 function isText(mime) {
@@ -278,6 +294,12 @@ async function openPreview(file) {
     fileUrl = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
   } else {
     fileUrl = rawUrl(file.name)
+  }
+
+  // Open Word documents in word viewer
+  if (isWord(file.mime)) {
+    openWordViewer(fileUrl, file.name)
+    return
   }
 
   // Open image, text, video, audio in file viewer

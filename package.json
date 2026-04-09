@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "docx-preview": "^0.3.7",
     "vue": "^3.5.29"
   },
   "devDependencies": {
