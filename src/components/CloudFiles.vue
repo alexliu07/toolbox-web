@@ -3,7 +3,9 @@ import { ref, computed, onMounted, onErrorCaptured, inject, markRaw, defineAsync
 import FileViewer from './FileViewer.vue'
 
 const FileViewerRaw = markRaw(FileViewer)
-const WordViewerRaw = markRaw(defineAsyncComponent(() => import('./WordViewer.vue')))
+const WordViewerRaw  = markRaw(defineAsyncComponent(() => import('./WordViewer.vue')))
+const ExcelViewerRaw = markRaw(defineAsyncComponent(() => import('./ExcelViewer.vue')))
+const PptxViewerRaw  = markRaw(defineAsyncComponent(() => import('./PptxViewer.vue')))
 
 // ── state ──
 const openWindow   = inject('openWindow')
@@ -26,6 +28,26 @@ function openWordViewer(fileUrl, fileName) {
     title: shortName,
     icon: '📝', width: 900, height: 720,
     component: WordViewerRaw,
+    props: { fileUrl, fileName: shortName },
+  })
+}
+
+function openExcelViewer(fileUrl, fileName) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  openWindow({
+    title: shortName,
+    icon: '📊', width: 960, height: 680,
+    component: ExcelViewerRaw,
+    props: { fileUrl, fileName: shortName },
+  })
+}
+
+function openPptxViewer(fileUrl, fileName) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  openWindow({
+    title: shortName,
+    icon: '📽', width: 960, height: 700,
+    component: PptxViewerRaw,
     props: { fileUrl, fileName: shortName },
   })
 }
@@ -130,6 +152,16 @@ function fileTypeIcon(mime, type) {
 function isWord(mime) {
   if (!mime) return false
   return mime.includes('wordprocessingml') || mime === 'application/msword'
+}
+
+function isExcel(mime) {
+  if (!mime) return false
+  return mime.includes('spreadsheetml') || mime === 'application/vnd.ms-excel'
+}
+
+function isPptx(mime) {
+  if (!mime) return false
+  return mime.includes('presentationml') || mime === 'application/vnd.ms-powerpoint'
 }
 
 function isImage(mime) { return mime && mime.startsWith('image/') }
@@ -299,6 +331,18 @@ async function openPreview(file) {
   // Open Word documents in word viewer
   if (isWord(file.mime)) {
     openWordViewer(fileUrl, file.name)
+    return
+  }
+
+  // Open Excel files in excel viewer
+  if (isExcel(file.mime)) {
+    openExcelViewer(fileUrl, file.name)
+    return
+  }
+
+  // Open PPTX files in pptx viewer
+  if (isPptx(file.mime)) {
+    openPptxViewer(fileUrl, file.name)
     return
   }
 

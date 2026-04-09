@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "docx-preview": "^0.3.7",
-    "vue": "^3.5.29"
+    "pptx-viewer": "^0.1.0",
+    "vue": "^3.5.29",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.4",
