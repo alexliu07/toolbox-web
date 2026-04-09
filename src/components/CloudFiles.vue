@@ -1,10 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, onErrorCaptured, inject, markRaw } from 'vue'
 import FileViewer   from './FileViewer.vue'
-import OfficeViewer from './OfficeViewer.vue'
 
 const FileViewerRaw   = markRaw(FileViewer)
-const OfficeViewerRaw = markRaw(OfficeViewer)
 
 // ── state ──
 const openWindow   = inject('openWindow')
@@ -19,16 +17,6 @@ function mimeToIcon(mime) {
   if (mime?.startsWith('audio/')) return '🎵'
   if (mime?.startsWith('text/'))  return '📝'
   return '📄'
-}
-
-function openOfficeViewer(fileUrl, fileName, fileType) {
-  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
-  openWindow({
-    title: shortName,
-    icon: '📑', width: 900, height: 700,
-    component: OfficeViewerRaw,
-    props: { fileUrl, fileName: shortName, fileType },
-  })
 }
 
 function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex = -1) {
@@ -127,19 +115,11 @@ function fileTypeIcon(mime, type) {
   return '📄'
 }
 
-function isPDF(mime) { return mime && mime.includes('pdf') }
-
-function isOffice(mime) {
-  if (!mime) return false
-  return mime.includes('wordprocessingml')
-      || mime.includes('spreadsheetml')
-      || mime === 'application/vnd.ms-excel'
-      || mime.includes('presentationml')
-}
 
 function isImage(mime) { return mime && mime.startsWith('image/') }
 function isText(mime) {
   if (!mime) return false
+  if (mime.startsWith('application/vnd.')) return false
   return mime.startsWith('text/') || mime.includes('json') || mime.includes('javascript') || mime.includes('xml') || mime.includes('yaml')
 }
 function isVideo(mime) { return mime && mime.startsWith('video/') }
@@ -298,12 +278,6 @@ async function openPreview(file) {
     fileUrl = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
   } else {
     fileUrl = rawUrl(file.name)
-  }
-
-  // Open PDF and office documents in office viewer
-  if (isPDF(file.mime) || isOffice(file.mime)) {
-    openOfficeViewer(fileUrl, file.name, file.mime)
-    return
   }
 
   // Open image, text, video, audio in file viewer
