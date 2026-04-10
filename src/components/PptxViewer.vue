@@ -102,8 +102,14 @@ function renderSlide(index) {
     height: renderH,
   })
 
-  // scroll thumbnail into view
+  // update active thumbnail highlight
   nextTick(() => {
+    const thumbs = thumbnailBar.value?.querySelectorAll('.pv-thumb')
+    if (thumbs) {
+      thumbs.forEach((el, i) => {
+        el.classList.toggle('pv-thumb-active', i === index)
+      })
+    }
     const active = thumbnailBar.value?.querySelector('.pv-thumb-active')
     active?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
   })
