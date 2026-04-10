@@ -256,6 +256,62 @@ router.get('/stream', optionalAuth, async (req, res) => {
   }
 })
 
+// GET /api/netease/user/playlist — 获取用户歌单列表
+router.get('/user/playlist', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  try {
+    const cred = getNeteaseCredentials(req.user.id)
+    if (!cred?.netease_uid) return res.status(401).json({ error: 'not logged in to Netease' })
+    const cookie = getCookies(req.user.id)
+    const result = await api.user_playlist({ uid: cred.netease_uid, cookie })
+    const body = result.body || result
+    if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
+    const playlists = (body.playlist || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      coverImgUrl: p.coverImgUrl,
+      trackCount: p.trackCount,
+    }))
+    res.json({ playlists })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /api/netease/playlist/detail?id=xxx — 获取歌单详情（全部歌曲）
+router.get('/playlist/detail', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  const { id } = req.query
+  if (!id) return res.status(400).json({ error: 'id required' })
+  try {
+    const cookie = getCookies(req.user.id)
+    const result = await api.playlist_track_all({ id: Number(id), cookie })
+    const body = result.body || result
+    if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
+    const songs = (body.songs || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      artists: s.ar?.map(a => a.name).join(' / ') || '',
+      album: s.al?.name || '',
+      duration: s.dt,
+      fee: s.fee,
+    }))
+    // get playlist name from playlist_detail
+    let name = '', coverImgUrl = ''
+    try {
+      const detailRes = await api.playlist_detail({ id: Number(id), cookie })
+      const detailBody = detailRes.body || detailRes
+      if (detailBody.playlist) {
+        name = detailBody.playlist.name || ''
+        coverImgUrl = detailBody.playlist.coverImgUrl || ''
+      }
+    } catch {}
+    res.json({ id: Number(id), name, coverImgUrl, songs })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
 // GET /api/netease/lyric — 获取歌词
 router.get('/lyric', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
