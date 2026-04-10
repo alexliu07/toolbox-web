@@ -312,6 +312,29 @@ router.get('/playlist/detail', requireAuth, async (req, res) => {
   }
 })
 
+// GET /api/netease/recommend/songs — 获取每日推荐歌曲
+router.get('/recommend/songs', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  try {
+    const cookie = getCookies(req.user.id)
+    if (!cookie) return res.status(401).json({ error: 'not logged in to Netease' })
+    const result = await api.recommend_songs({ cookie })
+    const body = result.body || result
+    if (body.code !== 200) return res.status(502).json({ error: 'upstream error', code: body.code })
+    const songs = (body.data?.dailySongs || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      artists: s.ar?.map(a => a.name).join(' / ') || '',
+      album: s.al?.name || '',
+      duration: s.dt,
+      fee: s.fee,
+    }))
+    res.json({ songs })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
 // GET /api/netease/lyric — 获取歌词
 router.get('/lyric', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })

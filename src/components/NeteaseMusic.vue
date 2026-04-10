@@ -116,17 +116,24 @@ watch(showPlaylist, (val) => {
 })
 
 // 歌单
-const currentTab = ref('search') // 'search' | 'playlists'
+const currentTab = ref('search') // 'search' | 'playlists' | 'daily'
 const showPlaylistDetail = ref(false)
 const userPlaylists = ref([])
 const playlistDetail = ref(null) // { id, name, coverImgUrl, songs }
 const loadingPlaylists = ref(false)
 const loadingPlaylistDetail = ref(false)
 
+// 每日推荐
+const dailySongs = ref([])
+const loadingDaily = ref(false)
+
 async function switchTab(tab) {
   currentTab.value = tab
   if (tab === 'playlists' && !userPlaylists.value.length && !loadingPlaylists.value) {
     await fetchUserPlaylists()
+  }
+  if (tab === 'daily' && !dailySongs.value.length && !loadingDaily.value) {
+    await fetchDailySongs()
   }
 }
 
@@ -157,6 +164,30 @@ async function fetchPlaylistDetail(id) {
 
 function backToPlaylists() {
   showPlaylistDetail.value = false
+}
+
+async function fetchDailySongs() {
+  loadingDaily.value = true
+  try {
+    const res = await authFetch('/api/netease/recommend/songs')
+    const data = await res.json()
+    dailySongs.value = data.songs || []
+  } catch {
+    dailySongs.value = []
+  }
+  loadingDaily.value = false
+}
+
+function playAllFromDaily() {
+  if (!dailySongs.value.length) return
+  playlist.value = dailySongs.value.map(s => ({ ...s }))
+  if (playMode.value === 'shuffle') {
+    playlistIndex.value = Math.floor(Math.random() * playlist.value.length)
+  } else {
+    playlistIndex.value = 0
+  }
+  savePlaylist()
+  activateSong(playlist.value[playlistIndex.value])
 }
 
 function playAllFromPlaylist() {
@@ -652,6 +683,15 @@ onUnmounted(() => {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
         歌单
       </button>
+      <button
+        v-if="neteaseUser"
+        class="tab-btn"
+        :class="{ active: currentTab === 'daily' }"
+        @click="switchTab('daily')"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        每日推荐
+      </button>
       <!-- 用户登录按钮/头像 -->
       <div class="user-area">
         <button v-if="!neteaseUser" class="login-btn" @click="startLogin()" title="登录网易云音乐">
@@ -745,6 +785,52 @@ onUnmounted(() => {
             <div class="user-playlist-count">{{ pl.trackCount }} 首</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 每日推荐页面 -->
+    <div v-show="currentTab === 'daily'" class="page-content">
+      <div class="results">
+        <div v-if="loadingDaily" class="loading">加载中...</div>
+        <div v-else-if="!dailySongs.length" class="empty-state">
+          <div class="empty-text">暂无推荐歌曲</div>
+        </div>
+        <template v-else>
+          <div class="playlist-detail-header">
+            <span class="playlist-detail-name">每日推荐</span>
+            <button class="pd-play-all-btn" @click="playAllFromDaily()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              播放全部
+            </button>
+          </div>
+          <div class="result-header">
+            <span class="col-name">歌曲</span>
+            <span class="col-artist">歌手</span>
+            <span class="col-album">专辑</span>
+            <span class="col-duration">时长</span>
+          </div>
+          <div
+            v-for="song in dailySongs"
+            :key="song.id"
+            class="song-row"
+            :class="{ active: currentSong?.id === song.id, playing: currentSong?.id === song.id && isPlaying }"
+            @dblclick="playSong(song)"
+            @click="playSong(song)"
+          >
+            <div class="col-name">
+              <span class="play-indicator">
+                <svg v-if="currentSong?.id === song.id && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              </span>
+              <span class="song-name">{{ song.name }}</span>
+              <span v-if="song.fee === 1" class="fee-badge vip">VIP</span>
+              <span v-else-if="song.fee === 4" class="fee-badge paid">付费专辑</span>
+            </div>
+            <span class="col-artist">{{ song.artists }}</span>
+            <span class="col-album">{{ song.album }}</span>
+            <span class="col-duration">{{ formatDuration(song.duration) }}</span>
+          </div>
+        </template>
       </div>
     </div>
 
