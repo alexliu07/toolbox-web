@@ -100,6 +100,21 @@ const playlistIndex = ref(-1)
 const playMode = ref('sequence') // 'sequence' | 'loop' | 'single' | 'shuffle'
 const showPlaylist = ref(false)
 
+function scrollToCurrentSong() {
+  if (playlistIndex.value < 0) return
+  // transition + v-if needs extra time for DOM to be ready
+  setTimeout(() => {
+    const activeEl = document.querySelector('.playlist-body .playlist-item.active')
+    if (activeEl) {
+      activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, 50)
+}
+
+watch(showPlaylist, (val) => {
+  if (val) scrollToCurrentSong()
+})
+
 // 格式化时长 ms → mm:ss
 function formatDuration(ms) {
   if (!ms) return '--:--'
