@@ -1,14 +1,45 @@
 <script setup>
-import { ref, watch, onMounted, onUnmounted, nextTick, inject } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, inject } from 'vue'
 
 const authFetch = inject('authFetch')
 const authToken = inject('authToken')
+
+const ROW_HEIGHT = 42
+const PLAYLIST_COVER_ROW_HEIGHT = 68
+const PAGE_MIN = 5
+
+const containerHeight = ref(500)
+const containerRef = ref(null)
+
+// Available list area = container - tab bar(~50) - player bar(~56) - padding(16*2)
+// Then subtract per-page fixed overhead:
+//   search: search bar(~62) + result header(~37) + pagination(~48) = ~147
+//   playlists: pagination(~48) = ~48
+//   daily/detail: header(~46) + result header(~37) + pagination(~48) = ~131
+const listHeight = computed(() => Math.max(80, containerHeight.value - 50 - 56 - 32))
+const pageSize = computed(() => Math.max(PAGE_MIN, Math.floor((listHeight.value - 147) / ROW_HEIGHT)))
+const pageSizePlaylists = computed(() => Math.max(PAGE_MIN, Math.floor((listHeight.value - 48) / PLAYLIST_COVER_ROW_HEIGHT)))
+const pageSizeDaily = computed(() => Math.max(PAGE_MIN, Math.floor((listHeight.value - 131) / ROW_HEIGHT)))
+
+let resizeObserver = null
+function setupResizeObserver() {
+  resizeObserver = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      containerHeight.value = entry.contentRect.height
+    }
+  })
+  if (containerRef.value) {
+    resizeObserver.observe(containerRef.value)
+    containerHeight.value = containerRef.value.getBoundingClientRect().height
+  }
+}
 
 const query = ref('')
 const songs = ref([])
 const songCount = ref(0)
 const loading = ref(false)
 const searched = ref(false)
+const searchPage = ref(1)
 
 // 播放状态
 const currentSong = ref(null)
@@ -99,6 +130,7 @@ const playlist = ref([]) // [{ id, name, artists, album, duration, fee }]
 const playlistIndex = ref(-1)
 const playMode = ref('sequence') // 'sequence' | 'loop' | 'single' | 'shuffle'
 const showPlaylist = ref(false)
+const playlistPage = ref(1)
 
 // 收藏状态
 const isLiked = ref(false)
@@ -115,7 +147,12 @@ function scrollToCurrentSong() {
 }
 
 watch(showPlaylist, (val) => {
-  if (val) scrollToCurrentSong()
+  if (val) {
+    if (playlistIndex.value >= 0) {
+      playlistPage.value = Math.floor(playlistIndex.value / pageSize.value) + 1
+    }
+    scrollToCurrentSong()
+  }
 })
 
 // 歌单
@@ -125,10 +162,13 @@ const userPlaylists = ref([])
 const playlistDetail = ref(null) // { id, name, coverImgUrl, songs }
 const loadingPlaylists = ref(false)
 const loadingPlaylistDetail = ref(false)
+const playlistsPage = ref(1)
+const playlistDetailPage = ref(1)
 
 // 每日推荐
 const dailySongs = ref([])
 const loadingDaily = ref(false)
+const dailyPage = ref(1)
 
 async function switchTab(tab) {
   currentTab.value = tab
@@ -155,6 +195,7 @@ async function fetchUserPlaylists() {
 async function fetchPlaylistDetail(id) {
   loadingPlaylistDetail.value = true
   showPlaylistDetail.value = true
+  playlistDetailPage.value = 1
   try {
     const res = await authFetch(`/api/netease/playlist/detail?id=${id}`)
     const data = await res.json()
@@ -215,13 +256,15 @@ function formatDuration(ms) {
 }
 
 // 搜索
-async function search() {
+async function search(page) {
   const q = query.value.trim()
   if (!q) return
+  if (page) searchPage.value = page
   loading.value = true
   searched.value = true
   try {
-    const res = await authFetch(`/api/netease/search?keywords=${encodeURIComponent(q)}`)
+    const offset = (searchPage.value - 1) * pageSize.value
+    const res = await authFetch(`/api/netease/search?keywords=${encodeURIComponent(q)}&limit=${pageSize.value}&offset=${offset}`)
     const data = await res.json()
     songs.value = data.songs || []
     songCount.value = data.songCount || 0
@@ -321,6 +364,8 @@ function removeFromPlaylist(index) {
       playSongAt(next)
     }
   }
+  const tp = totalPages(playlist.value.length)
+  if (playlistPage.value > tp) playlistPage.value = tp
   savePlaylist()
 }
 
@@ -472,6 +517,22 @@ function toggleLyrics() {
   if (showLyrics.value) nextTick(() => scrollToActiveLyric())
 }
 
+// ── 分页 ──
+function pagedItems(items, page, size) {
+  const ps = size || pageSize.value
+  const start = (page - 1) * ps
+  return items.slice(start, start + ps)
+}
+function totalPages(total, size) {
+  const ps = size || pageSize.value
+  return Math.max(1, Math.ceil(total / ps))
+}
+const searchTotalPages = computed(() => totalPages(songCount.value))
+const playlistsTotalPages = computed(() => totalPages(userPlaylists.value.length, pageSizePlaylists.value))
+const playlistDetailTotalPages = computed(() => totalPages(playlistDetail.value?.songs?.length || 0))
+const dailyTotalPages = computed(() => totalPages(dailySongs.value.length, pageSizeDaily.value))
+const playlistTotalPages = computed(() => totalPages(playlist.value.length))
+
 function onSearchKeydown(e) {
   if (e.key === 'Enter') search()
 }
@@ -566,9 +627,11 @@ onMounted(() => {
   loadVolume()
   loadPlaylist()
   checkLoginStatus()
+  nextTick(() => setupResizeObserver())
 })
 
 onUnmounted(() => {
+  if (resizeObserver) resizeObserver.disconnect()
   if (audioRef.value) {
     audioRef.value.pause()
     audioRef.value.src = ''
@@ -578,7 +641,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="netease">
+  <div ref="containerRef" class="netease">
     <!-- 登录覆盖层 -->
     <transition name="lyrics-fade">
       <div v-if="showLogin" class="login-overlay" @click.self="closeLogin()">
@@ -634,15 +697,15 @@ onUnmounted(() => {
           <div class="playlist-body">
             <div v-if="!playlist.length" class="playlist-empty">播放列表为空</div>
             <div
-              v-for="(song, i) in playlist"
+              v-for="(song, i) in pagedItems(playlist, playlistPage)"
               :key="song.id"
               class="playlist-item"
-              :class="{ active: i === playlistIndex }"
-              @click="playSongAt(i)"
+              :class="{ active: (playlistPage - 1) * pageSize + i === playlistIndex }"
+              @click="playSongAt((playlistPage - 1) * pageSize + i)"
             >
               <div class="playlist-item-name">
                 <span class="play-indicator">
-                  <svg v-if="i === playlistIndex && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                  <svg v-if="(playlistPage - 1) * pageSize + i === playlistIndex && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
                   <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </span>
                 <span class="playlist-item-song-name">{{ song.name }}</span>
@@ -651,10 +714,19 @@ onUnmounted(() => {
               </div>
               <span class="playlist-item-artist">{{ song.artists }}</span>
               <span class="playlist-item-duration">{{ formatDuration(song.duration) }}</span>
-              <button class="playlist-item-remove" @click.stop="removeFromPlaylist(i)" title="移除">
+              <button class="playlist-item-remove" @click.stop="removeFromPlaylist((playlistPage - 1) * pageSize + i)" title="移除">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
+          </div>
+          <div v-if="playlist.length && playlistTotalPages > 1" class="pagination-panel">
+            <button class="page-btn" :disabled="playlistPage <= 1" @click="playlistPage--">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="page-info">{{ playlistPage }} / {{ playlistTotalPages }}</span>
+            <button class="page-btn" :disabled="playlistPage >= playlistTotalPages" @click="playlistPage++">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -678,25 +750,36 @@ onUnmounted(() => {
           <div class="playlist-body">
             <div v-if="loadingPlaylistDetail" class="loading">加载中...</div>
             <div v-else-if="!playlistDetail?.songs?.length" class="playlist-empty">暂无歌曲</div>
-            <div
-              v-for="(song, i) in playlistDetail?.songs || []"
-              :key="song.id"
-              class="playlist-item"
-              :class="{ active: currentSong?.id === song.id }"
-              @click="playSong(song)"
-            >
-              <div class="playlist-item-name">
-                <span class="play-indicator">
-                  <svg v-if="currentSong?.id === song.id && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                </span>
-                <span class="playlist-item-song-name">{{ song.name }}</span>
-                <span v-if="song.fee === 1" class="fee-badge vip">VIP</span>
-                <span v-else-if="song.fee === 4" class="fee-badge paid">付费专辑</span>
+            <template v-else>
+              <div
+                v-for="(song, i) in pagedItems(playlistDetail.songs, playlistDetailPage)"
+                :key="song.id"
+                class="playlist-item"
+                :class="{ active: currentSong?.id === song.id }"
+                @click="playSong(song)"
+              >
+                <div class="playlist-item-name">
+                  <span class="play-indicator">
+                    <svg v-if="currentSong?.id === song.id && isPlaying" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                    <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </span>
+                  <span class="playlist-item-song-name">{{ song.name }}</span>
+                  <span v-if="song.fee === 1" class="fee-badge vip">VIP</span>
+                  <span v-else-if="song.fee === 4" class="fee-badge paid">付费专辑</span>
+                </div>
+                <span class="playlist-item-artist">{{ song.artists }}</span>
+                <span class="playlist-item-duration">{{ formatDuration(song.duration) }}</span>
               </div>
-              <span class="playlist-item-artist">{{ song.artists }}</span>
-              <span class="playlist-item-duration">{{ formatDuration(song.duration) }}</span>
-            </div>
+              <div v-if="playlistDetailTotalPages > 1" class="pagination-panel">
+                <button class="page-btn" :disabled="playlistDetailPage <= 1" @click="playlistDetailPage--">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span class="page-info">{{ playlistDetailPage }} / {{ playlistDetailTotalPages }}</span>
+                <button class="page-btn" :disabled="playlistDetailPage >= playlistDetailTotalPages" @click="playlistDetailPage++">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -801,6 +884,16 @@ onUnmounted(() => {
           <div class="empty-icon"> </div>
           <div class="empty-text">搜索歌曲开始播放</div>
         </div>
+
+        <div v-if="!loading && songs.length && searchTotalPages > 1" class="pagination">
+          <button class="page-btn" :disabled="searchPage <= 1" @click="search(searchPage - 1)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="page-info">{{ searchPage }} / {{ searchTotalPages }}</span>
+          <button class="page-btn" :disabled="searchPage >= searchTotalPages" @click="search(searchPage + 1)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -811,18 +904,29 @@ onUnmounted(() => {
         <div v-else-if="!userPlaylists.length" class="empty-state">
           <div class="empty-text">暂无歌单</div>
         </div>
-        <div
-          v-for="pl in userPlaylists"
-          :key="pl.id"
-          class="user-playlist-item"
-          @click="fetchPlaylistDetail(pl.id)"
-        >
-          <img v-if="pl.coverImgUrl" :src="proxyImg(pl.coverImgUrl)" class="user-playlist-cover" />
-          <div class="user-playlist-info">
-            <div class="user-playlist-name">{{ pl.name }}</div>
-            <div class="user-playlist-count">{{ pl.trackCount }} 首</div>
+        <template v-else>
+          <div
+            v-for="pl in pagedItems(userPlaylists, playlistsPage, pageSizePlaylists)"
+            :key="pl.id"
+            class="user-playlist-item"
+            @click="fetchPlaylistDetail(pl.id)"
+          >
+            <img v-if="pl.coverImgUrl" :src="proxyImg(pl.coverImgUrl)" class="user-playlist-cover" />
+            <div class="user-playlist-info">
+              <div class="user-playlist-name">{{ pl.name }}</div>
+              <div class="user-playlist-count">{{ pl.trackCount }} 首</div>
+            </div>
           </div>
-        </div>
+          <div v-if="playlistsTotalPages > 1" class="pagination">
+            <button class="page-btn" :disabled="playlistsPage <= 1" @click="playlistsPage--">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="page-info">{{ playlistsPage }} / {{ playlistsTotalPages }}</span>
+            <button class="page-btn" :disabled="playlistsPage >= playlistsTotalPages" @click="playlistsPage++">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -848,7 +952,7 @@ onUnmounted(() => {
             <span class="col-duration">时长</span>
           </div>
           <div
-            v-for="song in dailySongs"
+            v-for="song in pagedItems(dailySongs, dailyPage, pageSizeDaily)"
             :key="song.id"
             class="song-row"
             :class="{ active: currentSong?.id === song.id, playing: currentSong?.id === song.id && isPlaying }"
@@ -867,6 +971,15 @@ onUnmounted(() => {
             <span class="col-artist">{{ song.artists }}</span>
             <span class="col-album">{{ song.album }}</span>
             <span class="col-duration">{{ formatDuration(song.duration) }}</span>
+          </div>
+          <div v-if="dailyTotalPages > 1" class="pagination">
+            <button class="page-btn" :disabled="dailyPage <= 1" @click="dailyPage--">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="page-info">{{ dailyPage }} / {{ dailyTotalPages }}</span>
+            <button class="page-btn" :disabled="dailyPage >= dailyTotalPages" @click="dailyPage++">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
           </div>
         </template>
       </div>
@@ -1313,19 +1426,9 @@ onUnmounted(() => {
 /* ── 搜索结果 ── */
 .results {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: hidden;
   padding-right: 4px;
-  padding-bottom: 80px;
   min-height: 0;
-}
-
-.results::-webkit-scrollbar {
-  width: 6px;
-}
-
-.results::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 3px;
 }
 
 .result-header {
@@ -1624,17 +1727,8 @@ onUnmounted(() => {
 
 .playlist-body {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: hidden;
   padding: 8px;
-}
-
-.playlist-body::-webkit-scrollbar {
-  width: 4px;
-}
-
-.playlist-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 2px;
 }
 
 .playlist-empty {
@@ -1833,6 +1927,58 @@ onUnmounted(() => {
 
 .pd-play-all-btn:hover {
   background: rgba(225, 29, 72, 0.7);
+}
+
+/* ── 分页 ── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 0 8px;
+}
+
+.pagination-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.page-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.page-info {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 
 </style>
