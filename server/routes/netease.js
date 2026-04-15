@@ -335,6 +335,72 @@ router.get('/recommend/songs', requireAuth, async (req, res) => {
   }
 })
 
+// GET /api/netease/image?url=xxx — 图片代理
+router.get('/image', optionalAuth, async (req, res) => {
+  const { url } = req.query
+  if (!url) return res.status(400).json({ error: 'url required' })
+  // 只允许网易云音乐域名
+  if (!/^https?:\/\/[^/]*music\.126\.net\//.test(url) && !/^https?:\/\/[^/]*\.126\.net\//.test(url)) {
+    return res.status(400).json({ error: 'url not allowed' })
+  }
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) return res.status(resp.status).end()
+    const contentType = resp.headers.get('content-type')
+    const contentLength = resp.headers.get('content-length')
+    if (contentType) res.set('Content-Type', contentType)
+    if (contentLength) res.set('Content-Length', contentLength)
+    res.set('Cache-Control', 'public, max-age=86400')
+    const reader = resp.body.getReader()
+    const pump = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) { res.end(); return }
+        res.write(value)
+      }
+    }
+    await pump()
+  } catch (e) {
+    if (!res.headersSent) res.status(502).json({ error: 'upstream error', detail: e.message })
+    else res.end()
+  }
+})
+
+// GET /api/netease/like/check?id=xxx — 检查歌曲是否已收藏
+router.get('/like/check', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  const { id } = req.query
+  if (!id) return res.status(400).json({ error: 'id required' })
+  try {
+    const cookie = getCookies(req.user.id)
+    if (!cookie) return res.status(401).json({ error: 'not logged in to Netease' })
+    const cred = getNeteaseCredentials(req.user.id)
+    if (!cred?.netease_uid) return res.status(401).json({ error: 'not logged in to Netease' })
+    const result = await api.likelist({ uid: cred.netease_uid, cookie })
+    const body = result.body || result
+    const ids = body.ids || []
+    res.json({ liked: ids.includes(Number(id)) })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// POST /api/netease/like — 切换歌曲收藏状态
+router.post('/like', requireAuth, async (req, res) => {
+  if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })
+  const { id, like } = req.body
+  if (!id) return res.status(400).json({ error: 'id required' })
+  try {
+    const cookie = getCookies(req.user.id)
+    if (!cookie) return res.status(401).json({ error: 'not logged in to Netease' })
+    const result = await api.like({ id: Number(id), like: like ? 'true' : 'false', cookie })
+    const body = result.body || result
+    res.json({ ok: body.code === 200, code: body.code })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
 // GET /api/netease/lyric — 获取歌词
 router.get('/lyric', optionalAuth, async (req, res) => {
   if (!api) return res.status(500).json({ error: 'NeteaseCloudMusicApi not loaded' })

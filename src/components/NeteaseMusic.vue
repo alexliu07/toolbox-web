@@ -100,6 +100,9 @@ const playlistIndex = ref(-1)
 const playMode = ref('sequence') // 'sequence' | 'loop' | 'single' | 'shuffle'
 const showPlaylist = ref(false)
 
+// 收藏状态
+const isLiked = ref(false)
+
 function scrollToCurrentSong() {
   if (playlistIndex.value < 0) return
   // transition + v-if needs extra time for DOM to be ready
@@ -267,12 +270,41 @@ function activateSong(song) {
   lyrics.value = []
   tlyrics.value = []
   activeLyricIndex.value = -1
+  isLiked.value = false
   fetchLyrics(song.id)
+  checkLiked(song.id)
   setTimeout(() => {
     if (audioRef.value) {
       audioRef.value.play().catch(() => {})
     }
   }, 50)
+}
+
+async function checkLiked(id) {
+  try {
+    const res = await authFetch(`/api/netease/like/check?id=${id}`)
+    const data = await res.json()
+    isLiked.value = !!data.liked
+  } catch {
+    isLiked.value = false
+  }
+}
+
+async function toggleLike() {
+  if (!currentSong.value) return
+  const newLiked = !isLiked.value
+  isLiked.value = newLiked // optimistic update
+  try {
+    const res = await authFetch('/api/netease/like', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentSong.value.id, like: newLiked }),
+    })
+    const data = await res.json()
+    if (!data.ok) isLiked.value = !newLiked // rollback on failure
+  } catch {
+    isLiked.value = !newLiked // rollback on error
+  }
 }
 
 function removeFromPlaylist(index) {
@@ -524,6 +556,12 @@ async function logout() {
   neteaseUser.value = null
 }
 
+// 图片代理：将网易云图片 URL 通过后端转发
+function proxyImg(url) {
+  if (!url) return ''
+  return `/api/netease/image?url=${encodeURIComponent(url)}`
+}
+
 onMounted(() => {
   loadVolume()
   loadPlaylist()
@@ -698,7 +736,7 @@ onUnmounted(() => {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         </button>
         <div v-else class="user-info" @click="logout()" title="点击退出登录">
-          <img v-if="neteaseUser.avatar_url" :src="neteaseUser.avatar_url" class="user-avatar" />
+          <img v-if="neteaseUser.avatar_url" :src="proxyImg(neteaseUser.avatar_url)" class="user-avatar" />
           <span class="user-name">{{ neteaseUser.nickname }}</span>
         </div>
       </div>
@@ -779,7 +817,7 @@ onUnmounted(() => {
           class="user-playlist-item"
           @click="fetchPlaylistDetail(pl.id)"
         >
-          <img v-if="pl.coverImgUrl" :src="pl.coverImgUrl" class="user-playlist-cover" />
+          <img v-if="pl.coverImgUrl" :src="proxyImg(pl.coverImgUrl)" class="user-playlist-cover" />
           <div class="user-playlist-info">
             <div class="user-playlist-name">{{ pl.name }}</div>
             <div class="user-playlist-count">{{ pl.trackCount }} 首</div>
@@ -856,6 +894,12 @@ onUnmounted(() => {
       </template>
       <div v-else class="player-empty">未在播放</div>
       <div class="player-controls">
+        <button v-if="currentSong" class="player-side-btn" :class="{ active: isLiked }" @click="toggleLike()" :title="isLiked ? '取消收藏' : '收藏'">
+          <!-- 已收藏：实心心形 -->
+          <svg v-if="isLiked" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <!-- 未收藏：空心心形 -->
+          <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
         <button class="player-side-btn" @click="cyclePlayMode()" :title="{sequence:'顺序播放',loop:'列表循环',single:'单曲循环',shuffle:'随机播放'}[playMode]">
           <!-- 顺序播放 -->
           <svg v-if="playMode === 'sequence'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="8" x2="19" y2="8"/><polyline points="14 3 19 8 14 13"/><line x1="5" y1="16" x2="19" y2="16"/><polyline points="14 11 19 16 14 21"/></svg>
