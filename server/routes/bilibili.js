@@ -336,6 +336,59 @@ router.get('/stream', async (req, res) => {
   }
 })
 
+// 弹幕代理 - 转换为 DPlayer 格式
+router.get('/danmaku', async (req, res) => {
+  try {
+    const { oid } = req.query
+    if (!oid) {
+      return res.status(400).json({ code: -400, message: 'oid is required' })
+    }
+
+    const options = {
+      hostname: 'api.bilibili.com',
+      port: 443,
+      path: `/x/v1/dm/list.so?oid=${oid}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.bilibili.com'
+      }
+    }
+
+    const xmlData = await new Promise((resolve, reject) => {
+      const proxyReq = https.request(options, (proxyRes) => {
+        const chunks = []
+        proxyRes.on('data', chunk => chunks.push(chunk))
+        proxyRes.on('end', () => resolve(Buffer.concat(chunks).toString()))
+      })
+      proxyReq.on('error', reject)
+      proxyReq.end()
+    })
+
+    // 解析 XML 并转换为 DPlayer 格式
+    const danmakuList = []
+    const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
+    for (const match of dMatches) {
+      const [p, text] = match
+      const attrs = p.split(',')
+      if (attrs.length >= 5 && text) {
+        danmakuList.push({
+          time: parseFloat(attrs[0]) || 0,
+          type: parseInt(attrs[1]) || 1,
+          color: parseInt(attrs[2]) || 16777215,
+          author: attrs[3] || 'anonymous',
+          text: text.trim()
+        })
+      }
+    }
+
+    res.json(danmakuList)
+  } catch (e) {
+    console.error('Danmaku proxy error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 // 获取视频信息
 router.get('/videoinfo', async (req, res) => {
   try {

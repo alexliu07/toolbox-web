@@ -40,6 +40,8 @@ const currentCid = ref('')
 const videoInfo = ref(null)
 const streamUrl = ref('')
 const audioUrl = ref('')
+const danmakuOid = ref('')
+const danmakuList = ref([])
 const isPlaying = ref(false)
 const playerContainerRef = ref(null)
 // 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
@@ -138,6 +140,11 @@ async function playVideo(video) {
       throw new Error('获取视频信息失败')
     }
     currentCid.value = cidData.data[0].cid
+    danmakuOid.value = cidData.data[0].cid
+
+    // 获取弹幕
+    const danmakuRes = await authFetch(`/api/bilibili/danmaku?oid=${cidData.data[0].cid}`)
+    danmakuList.value = await danmakuRes.json()
 
     // 获取视频流地址
     await fetchStreamUrl()
@@ -166,7 +173,7 @@ function initDPlayer() {
     }
 
     const videoUrl = getProxyStreamUrl(streamUrl.value)
-    console.log('initDPlayer: creating player with url:', videoUrl ? 'yes' : 'no')
+    console.log('initDPlayer: creating player with url:', videoUrl ? 'yes' : 'no', 'danmaku:', danmakuList.value.length)
 
     dp.value = markRaw(new DPlayer({
       container: playerContainerRef.value,
@@ -174,6 +181,9 @@ function initDPlayer() {
         url: videoUrl,
         autoplay: true,
         type: 'normal'
+      },
+      danmaku: {
+        data: danmakuList.value
       },
       contextmenu: [
         { text: 'bilibili', link: 'https://www.bilibili.com' }
@@ -270,6 +280,8 @@ function closePlayer() {
   currentCid.value = ''
   streamUrl.value = ''
   audioUrl.value = ''
+  danmakuOid.value = ''
+  danmakuList.value = []
 }
 
 // 分页
