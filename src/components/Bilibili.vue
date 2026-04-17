@@ -146,36 +146,47 @@ async function playVideo(video) {
     alert('播放失败: ' + e.message)
     closePlayer()
   }
-  loadingStream.value = false
 }
 
 // 初始化 DPlayer
-async function initDPlayer() {
-  if (dp.value) {
-    dp.value.destroy()
-    dp.value = null
+function initDPlayer() {
+  try {
+    if (dp.value) {
+      dp.value.destroy()
+      dp.value = null
+    }
+    if (!streamUrl.value) {
+      console.warn('initDPlayer: no streamUrl')
+      return
+    }
+    if (!playerContainerRef.value) {
+      console.warn('initDPlayer: container not ready, retrying...')
+      setTimeout(initDPlayer, 100)
+      return
+    }
+
+    const videoUrl = getProxyStreamUrl(streamUrl.value)
+    console.log('initDPlayer: creating player with url:', videoUrl ? 'yes' : 'no')
+
+    dp.value = markRaw(new DPlayer({
+      container: playerContainerRef.value,
+      video: {
+        url: videoUrl,
+        autoplay: true,
+        type: 'normal'
+      },
+      contextmenu: [
+        { text: 'bilibili', link: 'https://www.bilibili.com' }
+      ]
+    }))
+
+    dp.value.on('play', () => { isPlaying.value = true })
+    dp.value.on('pause', () => { isPlaying.value = false })
+    dp.value.on('ended', () => { isPlaying.value = false })
+    console.log('DPlayer initialized successfully')
+  } catch (e) {
+    console.error('initDPlayer error:', e)
   }
-  if (!playerContainerRef.value || !streamUrl.value) return
-
-  await nextTick()
-
-  const videoUrl = getProxyStreamUrl(streamUrl.value)
-
-  dp.value = markRaw(new DPlayer({
-    container: playerContainerRef.value,
-    video: {
-      url: videoUrl,
-      autoplay: true,
-      type: 'normal'
-    },
-    contextmenu: [
-      { text: 'bilibili', link: 'https://www.bilibili.com' }
-    ]
-  }))
-
-  dp.value.on('play', () => { isPlaying.value = true })
-  dp.value.on('pause', () => { isPlaying.value = false })
-  dp.value.on('ended', () => { isPlaying.value = false })
 }
 
 async function fetchStreamUrl() {
@@ -227,12 +238,14 @@ async function fetchStreamUrl() {
     // 更新画质选项
     qualityOptions.value = data.data.accept_quality || []
 
-    // 初始化 DPlayer
+    // 等待 DOM 更新后初始化 DPlayer
     nextTick(() => {
       initDPlayer()
+      loadingStream.value = false
     })
   } catch (e) {
     console.error('Fetch stream URL error:', e)
+    loadingStream.value = false
   }
 }
 
@@ -246,7 +259,6 @@ async function changeQuality() {
     dp.value = null
   }
   await fetchStreamUrl()
-  loadingStream.value = false
 }
 
 function closePlayer() {
