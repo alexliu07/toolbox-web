@@ -7,6 +7,9 @@ import zlib from 'zlib'
 
 const router = express.Router()
 
+// 弹幕内存缓存 (参考 DPlayer-node)
+const danmakuCache = new Map()
+
 // WBI 签名相关配置
 let wbiKeys = {
   imgKey: '',
@@ -338,18 +341,26 @@ router.get('/stream', async (req, res) => {
 })
 
 // DPlayer 弹幕 API - GET /api/danmaku/:id 返回弹幕列表
+// 参考 DPlayer-node: https://github.com/MoePlayer/DPlayer-node
 router.get('/danmaku/:id', async (req, res) => {
   try {
-    const oid = req.params.id
-    if (!oid) {
-      return res.status(400).json({ code: -400, message: 'id is required' })
+    const id = req.params.id
+    if (!id) {
+      return res.json({ code: 1, msg: 'id is required' })
     }
 
-    // 使用 comment.bilibili.com/{cid}.xml 格式
+    // 检查内存缓存
+    const cached = danmakuCache.get(id)
+    if (cached) {
+      console.log(`Danmaku cache hit: ${id}`)
+      return res.json({ code: 0, data: cached })
+    }
+
+    // 获取 Bilibili 弹幕 XML
     const options = {
       hostname: 'comment.bilibili.com',
       port: 443,
-      path: `/${oid}.xml`,
+      path: `/${id}.xml`,
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -359,7 +370,6 @@ router.get('/danmaku/:id', async (req, res) => {
 
     const xmlBuffer = await new Promise((resolve, reject) => {
       const proxyReq = https.request(options, (proxyRes) => {
-        console.log('Danmaku response headers:', proxyRes.headers)
         const chunks = []
         proxyRes.on('data', chunk => chunks.push(chunk))
         proxyRes.on('end', () => resolve(Buffer.concat(chunks)))
@@ -368,51 +378,53 @@ router.get('/danmaku/:id', async (req, res) => {
       proxyReq.end()
     })
 
-    console.log('Danmaku buffer length:', xmlBuffer.length, 'first bytes:', xmlBuffer.slice(0, 20).toString('hex'))
-
-    // 解压 deflate 数据
+    // 解压数据
     let xmlData
     try {
       xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
-      console.log('Danmaku: used inflateRawSync')
     } catch (e1) {
       try {
         xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
-        console.log('Danmaku: used gunzipSync')
       } catch (e2) {
         try {
           xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
-          console.log('Danmaku: used unzipSync')
         } catch (e3) {
           xmlData = xmlBuffer.toString('utf8')
-          console.log('Danmaku: used raw string')
         }
       }
     }
 
     // 解析 XML 并转换为 DPlayer 格式
+    // DPlayer 格式: [time, type, color, author, text]
+    // type: 0=滚动, 1=顶部, 2=底部
     const danmakuList = []
     const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
     for (const match of dMatches) {
       const p = match[1]
       const text = match[2]
       const attrs = p.split(',')
-      if (text && attrs.length >= 2) {
-        danmakuList.push({
-          time: parseFloat(attrs[0]) || 0,
-          type: parseInt(attrs[1]) || 1,
-          color: parseInt(attrs[2]) || 16777215,
-          author: attrs[3] || '',
-          text: text.trim()
-        })
+      if (text && attrs.length >= 5) {
+        const time = parseFloat(attrs[0]) || 0
+        const rawType = parseInt(attrs[1]) || 1
+        // 转换弹幕类型: 4=底部->2, 5=顶部->1, 其他->0
+        let type = 0
+        if (rawType === 4) type = 2  // 底部
+        else if (rawType === 5) type = 1  // 顶部
+        const color = parseInt(attrs[2]) || 16777215
+        const author = attrs[3] || 'anonymous'
+        danmakuList.push([time, type, color, author, text.trim()])
       }
     }
 
-    console.log(`Danmaku: oid=${oid}, count=${danmakuList.length}`)
-    res.json(danmakuList)
+    // 存入缓存 (10分钟)
+    danmakuCache.set(id, danmakuList)
+    setTimeout(() => danmakuCache.delete(id), 10 * 60 * 1000)
+
+    console.log(`Danmaku: id=${id}, count=${danmakuList.length}`)
+    res.json({ code: 0, data: danmakuList })
   } catch (e) {
-    console.error('Danmaku proxy error:', e.message)
-    res.status(500).json({ code: -500, message: e.message })
+    console.error('Danmaku error:', e.message)
+    res.json({ code: 1, msg: e.message })
   }
 })
 
