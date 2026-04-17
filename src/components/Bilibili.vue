@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted, nextTick, inject, onUnmounted } from 'vue'
+import { ref, computed, onMounted, nextTick, inject, onUnmounted, shallowRef, markRaw } from 'vue'
+import DPlayer from 'dplayer'
 
 const authFetch = inject('authFetch')
 
@@ -40,7 +41,9 @@ const videoInfo = ref(null)
 const streamUrl = ref('')
 const audioUrl = ref('')
 const isPlaying = ref(false)
-const videoRef = ref(null)
+const playerContainerRef = ref(null)
+// 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
+let dp = shallowRef(null)
 const showPlayer = ref(false)
 
 // 画质选项
@@ -146,6 +149,35 @@ async function playVideo(video) {
   loadingStream.value = false
 }
 
+// 初始化 DPlayer
+async function initDPlayer() {
+  if (dp.value) {
+    dp.value.destroy()
+    dp.value = null
+  }
+  if (!playerContainerRef.value || !streamUrl.value) return
+
+  await nextTick()
+
+  const videoUrl = getProxyStreamUrl(streamUrl.value)
+
+  dp.value = markRaw(new DPlayer({
+    container: playerContainerRef.value,
+    video: {
+      url: videoUrl,
+      autoplay: true,
+      type: 'normal'
+    },
+    contextmenu: [
+      { text: 'bilibili', link: 'https://www.bilibili.com' }
+    ]
+  }))
+
+  dp.value.on('play', () => { isPlaying.value = true })
+  dp.value.on('pause', () => { isPlaying.value = false })
+  dp.value.on('ended', () => { isPlaying.value = false })
+}
+
 async function fetchStreamUrl() {
   if (!currentBvid.value || !currentCid.value) return
 
@@ -195,12 +227,9 @@ async function fetchStreamUrl() {
     // 更新画质选项
     qualityOptions.value = data.data.accept_quality || []
 
-    // 自动播放
+    // 初始化 DPlayer
     nextTick(() => {
-      if (videoRef.value && streamUrl.value) {
-        videoRef.value.play().catch(() => {})
-        isPlaying.value = true
-      }
+      initDPlayer()
     })
   } catch (e) {
     console.error('Fetch stream URL error:', e)
@@ -210,25 +239,21 @@ async function fetchStreamUrl() {
 async function changeQuality() {
   if (!currentBvid.value || !currentCid.value) return
   loadingStream.value = true
-  const wasPlaying = isPlaying.value
   isPlaying.value = false
-  if (videoRef.value) {
-    videoRef.value.pause()
-    videoRef.value.src = ''
+  if (dp.value) {
+    dp.value.pause()
+    dp.value.destroy()
+    dp.value = null
   }
   await fetchStreamUrl()
   loadingStream.value = false
-  if (wasPlaying && videoRef.value && streamUrl.value) {
-    videoRef.value.play().catch(() => {})
-    isPlaying.value = true
-  }
 }
 
 function closePlayer() {
   showPlayer.value = false
-  if (videoRef.value) {
-    videoRef.value.pause()
-    videoRef.value.src = ''
+  if (dp.value) {
+    dp.value.destroy()
+    dp.value = null
   }
   isPlaying.value = false
   currentVideo.value = null
@@ -236,12 +261,6 @@ function closePlayer() {
   currentCid.value = ''
   streamUrl.value = ''
   audioUrl.value = ''
-}
-
-function onVideoPlay() { isPlaying.value = true }
-function onVideoPause() { isPlaying.value = false }
-function onVideoEnded() {
-  isPlaying.value = false
 }
 
 // 分页
@@ -268,9 +287,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
-  if (videoRef.value) {
-    videoRef.value.pause()
-    videoRef.value.src = ''
+  if (dp.value) {
+    dp.value.destroy()
+    dp.value = null
   }
 })
 </script>
@@ -302,18 +321,7 @@ onUnmounted(() => {
             <span>正在获取播放地址...</span>
           </div>
           <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
-          <div v-else class="video-container">
-            <video
-              ref="videoRef"
-              :src="getProxyStreamUrl(streamUrl)"
-              controls
-              class="video-player"
-              @play="onVideoPlay"
-              @pause="onVideoPause"
-              @ended="onVideoEnded"
-              crossorigin="anonymous"
-            ></video>
-          </div>
+          <div v-else ref="playerContainerRef" class="dplayer-container"></div>
         </div>
       </div>
     </transition>
@@ -547,21 +555,13 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
-.video-container {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.video-player {
+.dplayer-container {
   width: 100%;
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  background: #000;
   border-radius: 8px;
+  overflow: hidden;
 }
 
 /* 搜索栏 */
