@@ -340,7 +340,101 @@ router.get('/stream', async (req, res) => {
   }
 })
 
-// DPlayer 弹幕 API - GET /api/danmaku/:id 返回弹幕列表
+// DPlayer 弹幕 API - GET /api/bilibili/danmaku/v3/?id=xxx
+// 参考 DPlayer-node: https://github.com/MoePlayer/DPlayer-node
+router.get('/danmaku/v3/', async (req, res) => {
+  const id = req.query.id
+  if (!id) {
+    return res.json({ code: 1, msg: 'id is required' })
+  }
+
+  // 检查内存缓存
+  const cached = danmakuCache.get(id)
+  if (cached) {
+    console.log(`Danmaku cache hit: ${id}`)
+    return res.json({ code: 0, data: cached })
+  }
+
+  // 获取 Bilibili 弹幕 XML
+  const options = {
+    hostname: 'comment.bilibili.com',
+    port: 443,
+    path: `/${id}.xml`,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://www.bilibili.com',
+      'Accept-Encoding': 'deflate, gzip, br'
+    }
+  }
+
+  try {
+    const xmlBuffer = await new Promise((resolve, reject) => {
+      const proxyReq = https.request(options, (proxyRes) => {
+        const chunks = []
+        proxyRes.on('data', chunk => chunks.push(chunk))
+        proxyRes.on('end', () => resolve(Buffer.concat(chunks)))
+      })
+      proxyReq.on('error', reject)
+      proxyReq.end()
+    })
+
+    // 解压数据
+    let xmlData
+    try {
+      xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
+    } catch (e1) {
+      try {
+        xmlData = zlib.inflateSync(xmlBuffer).toString('utf8')
+      } catch (e2) {
+        try {
+          xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
+        } catch (e3) {
+          try {
+            xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
+          } catch (e4) {
+            try {
+              xmlData = zlib.brotliDecompressSync(xmlBuffer).toString('utf8')
+            } catch (e5) {
+              xmlData = xmlBuffer.toString('utf8')
+            }
+          }
+        }
+      }
+    }
+
+    // 解析 XML 并转换为 DPlayer 格式
+    const danmakuList = []
+    const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
+    for (const match of dMatches) {
+      const p = match[1]
+      const text = match[2]
+      const attrs = p.split(',')
+      if (text && attrs.length >= 5) {
+        const time = parseFloat(attrs[0]) || 0
+        const rawType = parseInt(attrs[1]) || 1
+        let type = 0
+        if (rawType === 4) type = 2
+        else if (rawType === 5) type = 1
+        const color = parseInt(attrs[2]) || 16777215
+        const author = attrs[3] || 'anonymous'
+        danmakuList.push([time, type, color, author, text.trim()])
+      }
+    }
+
+    // 存入缓存 (10分钟)
+    danmakuCache.set(id, danmakuList)
+    setTimeout(() => danmakuCache.delete(id), 10 * 60 * 1000)
+
+    console.log(`Danmaku v3: id=${id}, count=${danmakuList.length}`)
+    res.json({ code: 0, data: danmakuList })
+  } catch (e) {
+    console.error('Danmaku error:', e.message)
+    res.json({ code: 1, msg: e.message })
+  }
+})
+
+// DPlayer 弹幕 API - GET /api/bilibili/danmaku/:id (直接格式)
 // 参考 DPlayer-node: https://github.com/MoePlayer/DPlayer-node
 router.get('/danmaku/:id', async (req, res) => {
   try {
@@ -348,7 +442,7 @@ router.get('/danmaku/:id', async (req, res) => {
     if (!id) {
       return res.json({ code: 1, msg: 'id is required' })
     }
-
+    console.log(id)
     // 检查内存缓存
     const cached = danmakuCache.get(id)
     if (cached) {
