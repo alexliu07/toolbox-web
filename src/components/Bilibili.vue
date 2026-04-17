@@ -46,7 +46,7 @@ const playerContainerRef = ref(null)
 let dp = shallowRef(null)
 const showPlayer = ref(false)
 
-// 画质选项
+// 画质选项: { qn: 数字, desc: 描述 }
 const qualityOptions = ref([])
 const selectedQuality = ref(16)
 const loadingStream = ref(false)
@@ -222,8 +222,13 @@ async function fetchStreamUrl() {
       streamUrl.value = ''
     }
 
-    // 更新画质选项
-    qualityOptions.value = data.data.accept_quality || []
+    // 更新画质选项 (qn: 数字, desc: 描述)
+    const qnList = data.data.accept_quality || []
+    const descList = data.data.accept_description || []
+    qualityOptions.value = qnList.map((qn, i) => ({
+      qn,
+      desc: descList[i] || `${qn}p`
+    }))
 
     // 等待 DOM 更新后初始化 DPlayer
     nextTick(() => {
@@ -312,7 +317,7 @@ onUnmounted(() => {
           </div>
           <div class="player-controls">
             <select v-model="selectedQuality" class="quality-select" @change="changeQuality" :disabled="loadingStream">
-              <option v-for="q in qualityOptions" :key="q" :value="q">{{ q }}p</option>
+              <option v-for="q in qualityOptions" :key="q.qn" :value="q.qn">{{ q.desc }}</option>
             </select>
             <button class="player-close-btn" @click="closePlayer()" title="关闭">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
