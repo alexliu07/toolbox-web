@@ -364,12 +364,14 @@ router.get('/danmaku/:id', async (req, res) => {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com'
+        'Referer': 'https://www.bilibili.com',
+        'Accept-Encoding': 'deflate, gzip, br'
       }
     }
 
     const xmlBuffer = await new Promise((resolve, reject) => {
       const proxyReq = https.request(options, (proxyRes) => {
+        console.log('Danmaku response headers:', JSON.stringify(proxyRes.headers))
         const chunks = []
         proxyRes.on('data', chunk => chunks.push(chunk))
         proxyRes.on('end', () => resolve(Buffer.concat(chunks)))
@@ -378,18 +380,33 @@ router.get('/danmaku/:id', async (req, res) => {
       proxyReq.end()
     })
 
-    // 解压数据
+    console.log('Danmaku raw buffer:', xmlBuffer.length, 'bytes, first bytes:', xmlBuffer.slice(0, 30).toString('hex'))
+
+    // 解压数据 - 使用流式解压更可靠
     let xmlData
     try {
+      // 首先尝试 raw inflate（无 header）
       xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
     } catch (e1) {
       try {
-        xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
+        // 尝试 inflate（带 header）
+        xmlData = zlib.inflateSync(xmlBuffer).toString('utf8')
       } catch (e2) {
         try {
-          xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
+          // 尝试 gzip
+          xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
         } catch (e3) {
-          xmlData = xmlBuffer.toString('utf8')
+          try {
+            // 尝试 unzip
+            xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
+          } catch (e4) {
+            // 尝试 Brotli
+            try {
+              xmlData = zlib.brotliDecompressSync(xmlBuffer).toString('utf8')
+            } catch (e5) {
+              xmlData = xmlBuffer.toString('utf8')
+            }
+          }
         }
       }
     }
@@ -397,6 +414,8 @@ router.get('/danmaku/:id', async (req, res) => {
     // 解析 XML 并转换为 DPlayer 格式
     // DPlayer 格式: [time, type, color, author, text]
     // type: 0=滚动, 1=顶部, 2=底部
+    console.log('Danmaku decompressed XML (first 200 chars):', xmlData.slice(0, 200))
+
     const danmakuList = []
     const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
     for (const match of dMatches) {
