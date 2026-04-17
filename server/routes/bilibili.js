@@ -3,6 +3,7 @@ import https from 'https'
 import http from 'http'
 import crypto from 'crypto'
 import { URL } from 'url'
+import zlib from 'zlib'
 
 const router = express.Router()
 
@@ -336,7 +337,7 @@ router.get('/stream', async (req, res) => {
   }
 })
 
-// 弹幕代理 - 转换为 DPlayer 格式
+// 弹幕代理 - 使用 deflate 解压并转换为 DPlayer 格式
 router.get('/danmaku', async (req, res) => {
   try {
     const { oid } = req.query
@@ -344,10 +345,11 @@ router.get('/danmaku', async (req, res) => {
       return res.status(400).json({ code: -400, message: 'oid is required' })
     }
 
+    // 使用 comment.bilibili.com/{cid}.xml 格式，更简洁
     const options = {
-      hostname: 'api.bilibili.com',
+      hostname: 'comment.bilibili.com',
       port: 443,
-      path: `/x/v1/dm/list.so?oid=${oid}`,
+      path: `/${oid}.xml`,
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -355,33 +357,58 @@ router.get('/danmaku', async (req, res) => {
       }
     }
 
-    const xmlData = await new Promise((resolve, reject) => {
+    const xmlBuffer = await new Promise((resolve, reject) => {
       const proxyReq = https.request(options, (proxyRes) => {
+        console.log('Danmaku response headers:', proxyRes.headers)
         const chunks = []
         proxyRes.on('data', chunk => chunks.push(chunk))
-        proxyRes.on('end', () => resolve(Buffer.concat(chunks).toString()))
+        proxyRes.on('end', () => resolve(Buffer.concat(chunks)))
       })
       proxyReq.on('error', reject)
       proxyReq.end()
     })
 
+    console.log('Danmaku buffer length:', xmlBuffer.length, 'first bytes:', xmlBuffer.slice(0, 20).toString('hex'))
+
+    // 解压 deflate 数据
+    let xmlData
+    try {
+      xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
+      console.log('Danmaku: used inflateRawSync')
+    } catch (e1) {
+      try {
+        xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
+        console.log('Danmaku: used gunzipSync')
+      } catch (e2) {
+        try {
+          xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
+          console.log('Danmaku: used unzipSync')
+        } catch (e3) {
+          xmlData = xmlBuffer.toString('utf8')
+          console.log('Danmaku: used raw string')
+        }
+      }
+    }
+
     // 解析 XML 并转换为 DPlayer 格式
     const danmakuList = []
     const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
     for (const match of dMatches) {
-      const [p, text] = match
+      const p = match[1]
+      const text = match[2]
       const attrs = p.split(',')
-      if (attrs.length >= 5 && text) {
+      if (text && attrs.length >= 2) {
         danmakuList.push({
           time: parseFloat(attrs[0]) || 0,
           type: parseInt(attrs[1]) || 1,
           color: parseInt(attrs[2]) || 16777215,
-          author: attrs[3] || 'anonymous',
+          author: attrs[3] || '',
           text: text.trim()
         })
       }
     }
 
+    console.log(`Danmaku: oid=${oid}, count=${danmakuList.length}`)
     res.json(danmakuList)
   } catch (e) {
     console.error('Danmaku proxy error:', e.message)
