@@ -272,6 +272,7 @@ router.get('/stream', async (req, res) => {
     const isHttps = urlObj.protocol === 'https:'
     const httpModule = isHttps ? https : http
 
+    const rangeHeader = req.headers['range']
     const options = {
       hostname: urlObj.hostname,
       port: urlObj.port || (isHttps ? 443 : 80),
@@ -280,20 +281,44 @@ router.get('/stream', async (req, res) => {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://www.bilibili.com',
-        'Range': req.headers['range'] || ''
+        'Origin': 'https://www.bilibili.com'
       }
     }
 
+    // 如果有 Range header，添加到请求中
+    if (rangeHeader) {
+      options.headers['Range'] = rangeHeader
+    }
+
     const proxyReq = httpModule.request(options, (proxyRes) => {
+      const statusCode = proxyRes.statusCode
+
       res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'video/mp4')
       res.setHeader('Access-Control-Allow-Origin', '*')
       res.setHeader('Access-Control-Allow-Headers', 'Range')
-      if (proxyRes.headers['content-range']) {
-        res.setHeader('Content-Range', proxyRes.headers['content-range'])
+
+      // 处理 Range 响应
+      if (statusCode === 206) {
+        if (proxyRes.headers['content-range']) {
+          res.setHeader('Content-Range', proxyRes.headers['content-range'])
+        }
+        res.setHeader('Accept-Ranges', 'bytes')
+        if (proxyRes.headers['content-length']) {
+          res.setHeader('Content-Length', proxyRes.headers['content-length'])
+        }
       }
-      if (proxyRes.headers['accept-ranges']) {
-        res.setHeader('Accept-Ranges', proxyRes.headers['accept-ranges'])
+
+      // 处理 200 响应（无 Range 或 Range 无效）
+      if (statusCode === 200) {
+        res.setHeader('Accept-Ranges', 'bytes')
+        if (proxyRes.headers['content-length']) {
+          res.setHeader('Content-Length', proxyRes.headers['content-length'])
+        }
       }
+
+      // 设置正确的状态码
+      res.status(statusCode)
+
       proxyRes.pipe(res)
     })
 

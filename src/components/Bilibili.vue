@@ -183,6 +183,19 @@ function initDPlayer() {
     dp.value.on('play', () => { isPlaying.value = true })
     dp.value.on('pause', () => { isPlaying.value = false })
     dp.value.on('ended', () => { isPlaying.value = false })
+    dp.value.on('seeking', () => { console.log('DPlayer: seeking...') })
+    dp.value.on('seeked', () => { console.log('DPlayer: seeked') })
+
+    // 获取当前播放时间，用于 seek 时重新获取流
+    const video = dp.value.video
+    video.addEventListener('seeking', async () => {
+      const currentTime = video.currentTime
+      console.log('Seeking to:', currentTime)
+    })
+    video.addEventListener('seeked', async () => {
+      console.log('Seeked to:', video.currentTime)
+    })
+
     console.log('DPlayer initialized successfully')
   } catch (e) {
     console.error('initDPlayer error:', e)
@@ -193,7 +206,8 @@ async function fetchStreamUrl() {
   if (!currentBvid.value || !currentCid.value) return
 
   try {
-    const res = await authFetch(`/api/bilibili/playurl?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}&qn=${selectedQuality.value}&fnval=16&fourk=1`)
+    // fnval=1 返回 FLV/MP4 格式，支持拖动
+    const res = await authFetch(`/api/bilibili/playurl?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}&qn=${selectedQuality.value}&fnval=1&fourk=1`)
     const data = await res.json()
     if (data.code !== 0) {
       throw new Error(data.message || '获取播放地址失败')
@@ -201,38 +215,11 @@ async function fetchStreamUrl() {
 
     videoInfo.value = data.data
 
-    // 解析DASH流
-    if (data.data.dash) {
-      const dash = data.data.dash
-      // 优先选择HEVC编码的4K视频，然后是AV1，然后是AVC
-      let videoList = dash.video || []
-
-      // 按分辨率和编码排序
-      videoList.sort((a, b) => {
-        const resA = a.resolution || 0
-        const resB = b.resolution || 0
-        if (resB !== resA) return resB - resA
-        // 偏好HEVC > AV1 > AVC
-        const codecOrder = { 'hev1': 3, 'hvc1': 3, 'av01': 2, 'avc1': 1 }
-        const codecA = codecOrder[a.codecs?.slice(0, 4)] || 0
-        const codecB = codecOrder[b.codecs?.slice(0, 4)] || 0
-        return codecB - codecA
-      })
-
-      const bestVideo = videoList[0]
-      if (bestVideo?.baseUrl) {
-        streamUrl.value = bestVideo.baseUrl
-      }
-
-      // 获取音频
-      const audioList = dash.audio || []
-      if (audioList.length > 0) {
-        audioList.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))
-        audioUrl.value = audioList[0].baseUrl
-      }
-    } else if (data.data.durl) {
-      // MP4格式
+    // 解析 FLV/MP4 流
+    if (data.data.durl && data.data.durl.length > 0) {
       streamUrl.value = data.data.durl[0]?.url || ''
+    } else {
+      streamUrl.value = ''
     }
 
     // 更新画质选项
@@ -241,7 +228,12 @@ async function fetchStreamUrl() {
     // 等待 DOM 更新后初始化 DPlayer
     nextTick(() => {
       initDPlayer()
-      loadingStream.value = false
+      // 等待 DPlayer 内部渲染完成后再隐藏 loading
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          loadingStream.value = false
+        })
+      })
     })
   } catch (e) {
     console.error('Fetch stream URL error:', e)
@@ -537,11 +529,11 @@ onUnmounted(() => {
 
 .player-body {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  position: relative;
   overflow: hidden;
   padding: 16px;
+  box-sizing: border-box;
 }
 
 .player-loading,
@@ -570,10 +562,47 @@ onUnmounted(() => {
 .dplayer-container {
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
   border-radius: 8px;
   overflow: hidden;
+  position: absolute;
+  inset: 0;
+}
+
+/* 确保 DPlayer 内部元素填满容器 */
+:deep(.dplayer) {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+:deep(.dplayer-video-wrap) {
+  width: 100%;
+  height: 100%;
+}
+
+:deep(.dplayer-video) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+:deep(.dplayer-bar-wrap) {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+:deep(.dplayer-bar) {
+  pointer-events: none;
+}
+
+:deep(.dplayer-bar-preview) {
+  pointer-events: none;
+}
+
+:deep(.dplayer-controls) {
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.5));
+  padding: 10px;
 }
 
 /* 搜索栏 */
