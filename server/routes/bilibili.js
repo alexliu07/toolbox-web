@@ -337,15 +337,15 @@ router.get('/stream', async (req, res) => {
   }
 })
 
-// 弹幕代理 - 使用 deflate 解压并转换为 DPlayer 格式
-router.get('/danmaku', async (req, res) => {
+// DPlayer 弹幕 API - GET /api/danmaku/:id 返回弹幕列表
+router.get('/danmaku/:id', async (req, res) => {
   try {
-    const { oid } = req.query
+    const oid = req.params.id
     if (!oid) {
-      return res.status(400).json({ code: -400, message: 'oid is required' })
+      return res.status(400).json({ code: -400, message: 'id is required' })
     }
 
-    // 使用 comment.bilibili.com/{cid}.xml 格式，更简洁
+    // 使用 comment.bilibili.com/{cid}.xml 格式
     const options = {
       hostname: 'comment.bilibili.com',
       port: 443,
