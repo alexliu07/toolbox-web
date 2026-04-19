@@ -229,7 +229,7 @@ async function initNPlayer() {
       }
     }
 
-    const danmaku = new Danmaku({ items: danmakuItems })
+    const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true})
 
     dp.value = markRaw(new NPlayer({
       src: videoUrl,

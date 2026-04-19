@@ -205,14 +205,14 @@ onMounted(async () => {
     return new Proxy({}, handler);
   })();
 
-  // try {
-  //   Object.defineProperty(window, 'localStorage', {
-  //     value: StoragePolyfill,
-  //     writable: false
-  //   });
-  // } catch (e) {
-  //   window.localStorage = StoragePolyfill;
-  // }
+  try {
+    Object.defineProperty(window, 'localStorage', {
+      value: StoragePolyfill,
+      writable: false
+    });
+  } catch (e) {
+    window.localStorage = StoragePolyfill;
+  }
 
 })
 onUnmounted(() => clearInterval(timer))
