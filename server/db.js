@@ -114,6 +114,18 @@ export async function initDatabase() {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_localstorage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      ls_key TEXT NOT NULL,
+      ls_value TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, ls_key)
+    )
+  `)
+
   // Save to disk
   saveDatabase()
 
@@ -380,6 +392,38 @@ export function saveNeteaseCredentials(userId, { cookies, netease_uid, nickname,
 
 export function deleteNeteaseCredentials(userId) {
   db.run('DELETE FROM user_netease_credentials WHERE user_id = ?', [userId])
+  saveDatabase()
+}
+
+// ── User localStorage operations ──
+
+export function getUserLocalStorage(userId) {
+  const stmt = db.prepare('SELECT ls_key, ls_value FROM user_localstorage WHERE user_id = ?')
+  stmt.bind([userId])
+  const storage = {}
+  while (stmt.step()) {
+    const row = stmt.getAsObject()
+    storage[row.ls_key] = row.ls_value
+  }
+  stmt.free()
+  return storage
+}
+
+export function setUserLocalStorageItem(userId, key, value) {
+  db.run(
+    "INSERT OR REPLACE INTO user_localstorage (user_id, ls_key, ls_value, updated_at) VALUES (?, ?, ?, datetime('now'))",
+    [userId, key, value]
+  )
+  saveDatabase()
+}
+
+export function removeUserLocalStorageItem(userId, key) {
+  db.run('DELETE FROM user_localstorage WHERE user_id = ? AND ls_key = ?', [userId, key])
+  saveDatabase()
+}
+
+export function clearUserLocalStorage(userId) {
+  db.run('DELETE FROM user_localstorage WHERE user_id = ?', [userId])
   saveDatabase()
 }
 
