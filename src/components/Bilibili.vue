@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, inject, onUnmounted, shallowRef, markRaw } from 'vue'
-import DPlayer from 'dplayer'
+import NPlayer from 'nplayer'
+import Danmaku from '@nplayer/danmaku'
 
 const authFetch = inject('authFetch')
 
@@ -151,74 +152,73 @@ async function playVideo(video) {
   }
 }
 
-// 初始化 DPlayer
-function initDPlayer() {
+// 初始化 NPlayer
+async function initNPlayer() {
   try {
     if (dp.value) {
-      dp.value.destroy()
+      dp.value.dispose()
       dp.value = null
     }
     if (!streamUrl.value) {
-      console.warn('initDPlayer: no streamUrl')
+      console.warn('initNPlayer: no streamUrl')
       return
     }
     if (!playerContainerRef.value) {
-      console.warn('initDPlayer: container not ready, retrying...')
-      setTimeout(initDPlayer, 100)
+      console.warn('initNPlayer: container not ready, retrying...')
+      setTimeout(initNPlayer, 100)
       return
     }
 
     const videoUrl = getProxyStreamUrl(streamUrl.value)
-    console.log('initDPlayer: creating player with url:', videoUrl ? 'yes' : 'no', 'danmaku id:', danmakuOid.value)
 
-    dp.value = markRaw(new DPlayer({
-      container: playerContainerRef.value,
-      video: {
-        url: videoUrl,
-        autoplay: true,
-        type: 'normal'
-      },
-      danmaku: {
-        id: danmakuOid.value,
-        api: '/api/bilibili/danmaku/'
-      },
-      contextmenu: [
-        { text: 'bilibili', link: 'https://www.bilibili.com' }
-      ]
+    // 获取弹幕
+    let danmakuItems = []
+    if (danmakuOid.value) {
+      try {
+        const res = await authFetch(`/api/bilibili/danmaku/${danmakuOid.value}`)
+        const data = await res.json()
+        if (data.code === 0 && Array.isArray(data.data)) {
+          danmakuItems = data.data.map(([time, type, color, , text]) => ({
+            time,
+            text,
+            color: '#' + color.toString(16).padStart(6, '0'),
+            type: type === 1 ? 'top' : type === 2 ? 'bottom' : 'scroll'
+          }))
+        }
+      } catch (e) {
+        console.warn('Failed to fetch danmaku:', e)
+      }
+    }
+
+    const danmaku = new Danmaku({ items: danmakuItems })
+
+    dp.value = markRaw(new NPlayer({
+      src: videoUrl,
+      autoplay: true,
+      plugins: [danmaku],
     }))
 
     dp.value.on('play', () => { isPlaying.value = true })
     dp.value.on('pause', () => { isPlaying.value = false })
     dp.value.on('ended', () => { isPlaying.value = false })
-    dp.value.on('seeking', () => { console.log('DPlayer: seeking...') })
-    dp.value.on('seeked', () => { console.log('DPlayer: seeked') })
 
-    // 获取当前播放时间，用于 seek 时重新获取流
-    const video = dp.value.video
-    video.addEventListener('seeking', async () => {
-      const currentTime = video.currentTime
-      console.log('Seeking to:', currentTime)
-    })
-    video.addEventListener('seeked', async () => {
-      console.log('Seeked to:', video.currentTime)
-    })
+    dp.value.mount(playerContainerRef.value)
 
-    // 修复其他设备弹幕不滚动：DPlayer 初始化时容器宽度可能为 0（窗口动画未完成）
-    // 延迟调用 resize() 让弹幕重新计算容器宽度
+    // 修复窗口动画完成前容器宽度为 0 导致弹幕不滚动
     setTimeout(() => {
-      if (dp.value?.danmaku) dp.value.danmaku.resize()
+      if (dp.value) dp.value.emit('resize')
     }, 300)
 
-    // 监听容器尺寸变化，确保窗口缩放时弹幕也能正确重算
+    // 监听容器尺寸变化
     if (playerResizeObserver) playerResizeObserver.disconnect()
     playerResizeObserver = new ResizeObserver(() => {
-      if (dp.value?.danmaku) dp.value.danmaku.resize()
+      if (dp.value) dp.value.emit('resize')
     })
     playerResizeObserver.observe(playerContainerRef.value)
 
-    console.log('DPlayer initialized successfully')
+    console.log('NPlayer initialized successfully')
   } catch (e) {
-    console.error('initDPlayer error:', e)
+    console.error('initNPlayer error:', e)
   }
 }
 
@@ -250,10 +250,10 @@ async function fetchStreamUrl() {
       desc: descList[i] || `${qn}p`
     }))
 
-    // 等待 DOM 更新后初始化 DPlayer
+    // 等待 DOM 更新后初始化 NPlayer
     nextTick(() => {
-      initDPlayer()
-      // 等待 DPlayer 内部渲染完成后再隐藏 loading
+      initNPlayer()
+      // 等待 NPlayer 内部渲染完成后再隐藏 loading
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           loadingStream.value = false
@@ -271,8 +271,7 @@ async function changeQuality() {
   loadingStream.value = true
   isPlaying.value = false
   if (dp.value) {
-    dp.value.pause()
-    dp.value.destroy()
+    dp.value.dispose()
     dp.value = null
   }
   await fetchStreamUrl()
@@ -285,7 +284,7 @@ function closePlayer() {
     playerResizeObserver = null
   }
   if (dp.value) {
-    dp.value.destroy()
+    dp.value.dispose()
     dp.value = null
   }
   isPlaying.value = false
@@ -323,7 +322,7 @@ onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
   if (playerResizeObserver) playerResizeObserver.disconnect()
   if (dp.value) {
-    dp.value.destroy()
+    dp.value.dispose()
     dp.value = null
   }
 })
@@ -356,7 +355,7 @@ onUnmounted(() => {
             <span>正在获取播放地址...</span>
           </div>
           <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
-          <div v-else ref="playerContainerRef" class="dplayer-container"></div>
+          <div v-else ref="playerContainerRef" class="nplayer-container"></div>
         </div>
       </div>
     </transition>
@@ -590,7 +589,7 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
-.dplayer-container {
+.nplayer-container {
   width: 100%;
   height: 100%;
   border-radius: 8px;
@@ -599,41 +598,14 @@ onUnmounted(() => {
   inset: 0;
 }
 
-/* 确保 DPlayer 内部元素填满容器 */
-:deep(.dplayer) {
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
+/* 确保 NPlayer 内部元素填满容器 */
+:deep(.nplayer) {
+  width: 100% !important;
+  height: 100% !important;
 }
 
-:deep(.dplayer-video-wrap) {
-  width: 100%;
-  height: 100%;
-}
-
-:deep(.dplayer-video) {
-  width: 100%;
-  height: 100%;
+:deep(.nplayer video) {
   object-fit: contain;
-}
-
-:deep(.dplayer-bar-wrap) {
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-:deep(.dplayer-bar) {
-  pointer-events: none;
-}
-
-:deep(.dplayer-bar-preview) {
-  pointer-events: none;
-}
-
-:deep(.dplayer-controls) {
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.5));
-  padding: 10px;
 }
 
 /* 搜索栏 */
