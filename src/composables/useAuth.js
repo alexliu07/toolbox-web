@@ -2,19 +2,8 @@ import { ref, computed } from 'vue'
 
 const API = '/api'
 
-// ── localStorage safe helpers ──
-function lsGet(key, fallback = '') {
-  try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
-}
-function lsSet(key, val) {
-  try { localStorage.setItem(key, val) } catch {}
-}
-function lsRemove(key) {
-  try { localStorage.removeItem(key) } catch {}
-}
-
 // ── shared singleton state ──
-const authToken = ref(lsGet('auth_token'))
+const authToken = ref(localStorage.getItem('auth_token'))
 const currentUser = ref(null)
 const authChecked = ref(false)
 const isLoggedIn = computed(() => !!currentUser.value)
@@ -37,7 +26,7 @@ export function useAuth() {
         currentUser.value = await res.json()
       } else {
         authToken.value = ''
-        lsRemove('auth_token')
+        localStorage.removeItem('auth_token')
       }
     } catch {
       // server offline
@@ -55,7 +44,7 @@ export function useAuth() {
     } catch { /* ignore */ }
     authToken.value = ''
     currentUser.value = null
-    lsRemove('auth_token')
+    localStorage.removeItem('auth_token')
   }
 
   function authFetch(url, options = {}) {
@@ -81,7 +70,7 @@ export function useAuth() {
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || '操作失败')
     authToken.value = data.token
-    lsSet('auth_token', data.token)
+    localStorage.setItem('auth_token', data.token)
     currentUser.value = { username: data.username, displayName: data.displayName }
   }
 

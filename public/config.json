@@ -16,5 +16,8 @@
   },
   "youdao": {
     "enabled": true
+  },
+  "handle": {
+    "enabled": true
   }
 }
