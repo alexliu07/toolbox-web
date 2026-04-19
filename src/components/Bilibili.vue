@@ -175,15 +175,15 @@ async function initNPlayer() {
     let danmakuItems = []
     if (danmakuOid.value) {
       try {
-        const res = await authFetch(`/api/bilibili/danmaku/${danmakuOid.value}`)
+        const res = await authFetch(`/api/bilibili/danmaku/?id=${danmakuOid.value}`)
         const data = await res.json()
         if (data.code === 0 && Array.isArray(data.data)) {
           danmakuItems = data.data.map(([time, type, color, , text]) => ({
-            time,
-            text,
+            time: time,
+            text: text,
             color: '#' + color.toString(16).padStart(6, '0'),
-            type: type === 1 ? 'top' : type === 2 ? 'bottom' : 'scroll'
-          }))
+            type: type === 5 ? 'top' : type === 4 ? 'bottom' : 'scroll'
+          })).sort((a, b) => a.time - b.time)
         }
       } catch (e) {
         console.warn('Failed to fetch danmaku:', e)
