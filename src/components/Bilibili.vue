@@ -45,6 +45,7 @@ const isPlaying = ref(false)
 const playerContainerRef = ref(null)
 // 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
 let dp = shallowRef(null)
+let playerResizeObserver = null
 const showPlayer = ref(false)
 
 // 画质选项: { qn: 数字, desc: 描述 }
@@ -202,6 +203,19 @@ function initDPlayer() {
       console.log('Seeked to:', video.currentTime)
     })
 
+    // 修复其他设备弹幕不滚动：DPlayer 初始化时容器宽度可能为 0（窗口动画未完成）
+    // 延迟调用 resize() 让弹幕重新计算容器宽度
+    setTimeout(() => {
+      if (dp.value?.danmaku) dp.value.danmaku.resize()
+    }, 300)
+
+    // 监听容器尺寸变化，确保窗口缩放时弹幕也能正确重算
+    if (playerResizeObserver) playerResizeObserver.disconnect()
+    playerResizeObserver = new ResizeObserver(() => {
+      if (dp.value?.danmaku) dp.value.danmaku.resize()
+    })
+    playerResizeObserver.observe(playerContainerRef.value)
+
     console.log('DPlayer initialized successfully')
   } catch (e) {
     console.error('initDPlayer error:', e)
@@ -266,6 +280,10 @@ async function changeQuality() {
 
 function closePlayer() {
   showPlayer.value = false
+  if (playerResizeObserver) {
+    playerResizeObserver.disconnect()
+    playerResizeObserver = null
+  }
   if (dp.value) {
     dp.value.destroy()
     dp.value = null
@@ -303,6 +321,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
+  if (playerResizeObserver) playerResizeObserver.disconnect()
   if (dp.value) {
     dp.value.destroy()
     dp.value = null
