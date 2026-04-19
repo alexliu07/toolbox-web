@@ -1,38 +1,38 @@
 <script setup>
-import { ref, computed, onMounted, nextTick, inject, onUnmounted, shallowRef, markRaw } from 'vue'
+import { ref, computed, nextTick, inject, onMounted, onUnmounted, shallowRef, markRaw } from 'vue'
 import NPlayer from 'nplayer'
 import Danmaku from '@nplayer/danmaku'
 
 const authFetch = inject('authFetch')
 
-const ROW_HEIGHT = 64
-const PAGE_MIN = 5
+const BILIBILI_API_PAGE_SIZE = 20
+// 卡片高度(90封面+20padding+2border) + gap
+const CARD_HEIGHT = 112
+const CARD_GAP = 8
+const PAGINATION_HEIGHT = 56
 
-const containerHeight = ref(500)
-const containerRef = ref(null)
-const listHeight = computed(() => Math.max(80, containerHeight.value - 50 - 56 - 32))
-const pageSize = computed(() => Math.max(PAGE_MIN, Math.floor((listHeight.value - 140) / ROW_HEIGHT)))
+// 结果区域高度 → 动态 pageSize
+const resultsRef = ref(null)
+const resultsHeight = ref(400)
+const pageSize = computed(() => Math.max(1, Math.floor((resultsHeight.value - PAGINATION_HEIGHT) / (CARD_HEIGHT + CARD_GAP))))
 
-let resizeObserver = null
-function setupResizeObserver() {
-  resizeObserver = new ResizeObserver(entries => {
-    for (const entry of entries) {
-      containerHeight.value = entry.contentRect.height
-    }
-  })
-  if (containerRef.value) {
-    resizeObserver.observe(containerRef.value)
-    containerHeight.value = containerRef.value.getBoundingClientRect().height
-  }
-}
+let resultsResizeObserver = null
 
 // 搜索状态
 const query = ref('')
-const searchResults = ref([])
+const allResults = ref([])      // 已缓存的全部结果（跨 API 页累积）
 const searchTotal = ref(0)
-const searchPage = ref(1)
+const localPage = ref(1)        // 本地展示页码
+const apiPage = ref(1)          // 已加载到第几 API 页
 const loading = ref(false)
 const searched = ref(false)
+
+const pagedResults = computed(() => {
+  const start = (localPage.value - 1) * pageSize.value
+  return allResults.value.slice(start, start + pageSize.value)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(searchTotal.value / pageSize.value)))
 
 // 当前播放视频
 const currentVideo = ref(null)
@@ -88,30 +88,56 @@ function proxyImg(url) {
   return `/api/bilibili/image?url=${encodeURIComponent(imgUrl)}`
 }
 
-// 搜索
-async function search(page) {
+// 新搜索（重置所有状态）
+async function search() {
   const q = query.value.trim()
   if (!q) return
-  if (page) searchPage.value = page
   loading.value = true
   searched.value = true
+  allResults.value = []
+  searchTotal.value = 0
+  localPage.value = 1
+  apiPage.value = 1
   try {
-    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${searchPage.value}`)
+    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=1`)
     const data = await res.json()
     if (data.code === 0 && data.data?.result) {
-      const videoList = data.data.result.filter(item => item.type === 'video')
-      searchResults.value = videoList
-      searchTotal.value = data.data.numResults || videoList.length
-    } else {
-      searchResults.value = []
-      searchTotal.value = 0
+      allResults.value = data.data.result.filter(item => item.type === 'video')
+      searchTotal.value = data.data.numResults || allResults.value.length
     }
   } catch (e) {
     console.error('Search error:', e)
-    searchResults.value = []
-    searchTotal.value = 0
   }
   loading.value = false
+}
+
+// 加载更多 API 页（追加到缓存）
+async function fetchApiPage(page) {
+  const q = query.value.trim()
+  if (!q) return
+  loading.value = true
+  try {
+    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${page}`)
+    const data = await res.json()
+    if (data.code === 0 && data.data?.result) {
+      const more = data.data.result.filter(item => item.type === 'video')
+      allResults.value = [...allResults.value, ...more]
+      apiPage.value = page
+    }
+  } catch (e) {
+    console.error('Search error:', e)
+  }
+  loading.value = false
+}
+
+async function goToPage(page) {
+  if (page < 1 || page > totalPages.value) return
+  // 检查是否需要加载更多 API 数据
+  const needed = page * pageSize.value
+  while (allResults.value.length < needed && allResults.value.length < searchTotal.value) {
+    await fetchApiPage(apiPage.value + 1)
+  }
+  localPage.value = page
 }
 
 function onSearchKeydown(e) {
@@ -296,30 +322,25 @@ function closePlayer() {
   danmakuOid.value = ''
 }
 
-// 分页
-function totalPages(total, size) {
-  const ps = size || pageSize.value
-  return Math.max(1, Math.ceil(total / ps))
-}
-const searchTotalPages = computed(() => totalPages(searchTotal.value))
-
-function pagedItems(items, page, size) {
-  const ps = size || pageSize.value
-  const start = (page - 1) * ps
-  return items.slice(start, start + ps)
-}
-
 function getProxyStreamUrl(url) {
   if (!url) return ''
   return `/api/bilibili/stream?url=${encodeURIComponent(url)}`
 }
 
 onMounted(() => {
-  nextTick(() => setupResizeObserver())
+  nextTick(() => {
+    if (resultsRef.value) {
+      resultsHeight.value = resultsRef.value.getBoundingClientRect().height
+      resultsResizeObserver = new ResizeObserver(entries => {
+        resultsHeight.value = entries[0].contentRect.height
+      })
+      resultsResizeObserver.observe(resultsRef.value)
+    }
+  })
 })
 
 onUnmounted(() => {
-  if (resizeObserver) resizeObserver.disconnect()
+  if (resultsResizeObserver) resultsResizeObserver.disconnect()
   if (playerResizeObserver) playerResizeObserver.disconnect()
   if (dp.value) {
     dp.value.dispose()
@@ -329,7 +350,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="bilibili">
+  <div class="bilibili">
     <!-- 播放器覆盖层 -->
     <transition name="player-fade">
       <div v-if="showPlayer && currentVideo" class="player-overlay">
@@ -376,13 +397,13 @@ onUnmounted(() => {
     </div>
 
     <!-- 搜索结果 -->
-    <div class="results">
+    <div ref="resultsRef" class="results">
       <div v-if="loading" class="loading">搜索中...</div>
 
-      <template v-if="!loading && searchResults.length">
+      <template v-if="!loading && pagedResults.length">
         <div class="result-list">
           <div
-            v-for="video in pagedItems(searchResults, searchPage, pageSize)"
+            v-for="video in pagedResults"
             :key="video.bvid"
             class="video-card"
             :class="{ active: currentBvid === video.bvid }"
@@ -424,18 +445,18 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="searchTotalPages > 1" class="pagination">
-          <button class="page-btn" :disabled="searchPage <= 1" @click="search(searchPage - 1)">
+        <div v-if="totalPages > 1" class="pagination">
+          <button class="page-btn" :disabled="localPage <= 1 || loading" @click="goToPage(localPage - 1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <span class="page-info">{{ searchPage }} / {{ searchTotalPages }}</span>
-          <button class="page-btn" :disabled="searchPage >= searchTotalPages" @click="search(searchPage + 1)">
+          <span class="page-info">{{ localPage }} / {{ totalPages }}</span>
+          <button class="page-btn" :disabled="localPage >= totalPages || loading" @click="goToPage(localPage + 1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
       </template>
 
-      <div v-if="!loading && searched && !searchResults.length" class="empty-state">
+      <div v-if="!loading && searched && !allResults.length" class="empty-state">
         <div class="empty-text">未找到相关视频</div>
       </div>
 
@@ -665,8 +686,7 @@ onUnmounted(() => {
 /* 结果列表 */
 .results {
   flex: 1;
-  overflow-y: hidden;
-  padding-right: 4px;
+  overflow: hidden;
   min-height: 0;
 }
 
