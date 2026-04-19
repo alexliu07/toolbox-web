@@ -42,6 +42,8 @@ const videoInfo = ref(null)
 const streamUrl = ref('')
 const audioUrl = ref('')
 const danmakuOid = ref('')
+const pageList = ref([])
+const currentPageIndex = ref(0)
 const isPlaying = ref(false)
 const playerContainerRef = ref(null)
 // 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
@@ -53,6 +55,7 @@ const showPlayer = ref(false)
 const qualityOptions = ref([])
 const selectedQuality = ref(16)
 const loadingStream = ref(false)
+const episodeCollapsed = ref(false)
 
 // 格式化数字
 function formatCount(num) {
@@ -60,6 +63,14 @@ function formatCount(num) {
   if (num >= 100000000) return (num / 100000000).toFixed(1) + '亿'
   if (num >= 10000) return (num / 10000).toFixed(1) + '万'
   return num.toString()
+}
+
+// 格式化秒数为 MM:SS
+function formatSeconds(sec) {
+  if (!sec) return ''
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 // 格式化时长
@@ -166,6 +177,8 @@ async function playVideo(video) {
     if (cidData.code !== 0 || !cidData.data?.length) {
       throw new Error('获取视频信息失败')
     }
+    pageList.value = cidData.data
+    currentPageIndex.value = 0
     currentCid.value = cidData.data[0].cid
     danmakuOid.value = cidData.data[0].cid
 
@@ -275,6 +288,9 @@ async function fetchStreamUrl() {
       qn,
       desc: descList[i] || `${qn}p`
     }))
+    // 实际返回的画质（API 可能降级）
+    const actualQn = data.data.quality
+    if (actualQn) selectedQuality.value = actualQn
 
     // 等待 DOM 更新后初始化 NPlayer
     nextTick(() => {
@@ -320,6 +336,24 @@ function closePlayer() {
   streamUrl.value = ''
   audioUrl.value = ''
   danmakuOid.value = ''
+  pageList.value = []
+  currentPageIndex.value = 0
+}
+
+async function switchEpisode(index) {
+  if (index === currentPageIndex.value) return
+  const page = pageList.value[index]
+  if (!page) return
+  currentPageIndex.value = index
+  currentCid.value = page.cid
+  danmakuOid.value = page.cid
+  loadingStream.value = true
+  isPlaying.value = false
+  if (dp.value) {
+    dp.value.dispose()
+    dp.value = null
+  }
+  await fetchStreamUrl()
 }
 
 function getProxyStreamUrl(url) {
@@ -376,7 +410,33 @@ onUnmounted(() => {
             <span>正在获取播放地址...</span>
           </div>
           <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
-          <div v-else ref="playerContainerRef" class="nplayer-container"></div>
+          <template v-else>
+            <div ref="playerContainerRef" class="nplayer-container" :class="{ 'has-episodes': pageList.length > 1, 'episode-collapsed': pageList.length > 1 && episodeCollapsed }"></div>
+            <div v-if="pageList.length > 1" class="episode-panel" :class="{ collapsed: episodeCollapsed }">
+              <div class="episode-title">
+                <button class="episode-toggle" @click="episodeCollapsed = !episodeCollapsed" :title="episodeCollapsed ? '展开选集' : '收起选集'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline v-if="episodeCollapsed" points="15 18 9 12 15 6"/>
+                    <polyline v-else points="9 18 15 12 9 6"/>
+                  </svg>
+                </button>
+                <span v-if="!episodeCollapsed">选集 ({{ pageList.length }})</span>
+              </div>
+              <div v-if="!episodeCollapsed" class="episode-list">
+                <button
+                  v-for="(page, idx) in pageList"
+                  :key="page.cid"
+                  class="episode-item"
+                  :class="{ active: idx === currentPageIndex }"
+                  @click="switchEpisode(idx)"
+                >
+                  <span class="episode-index">{{ idx + 1 }}</span>
+                  <span class="episode-name">{{ page.part || `第${idx + 1}集` }}</span>
+                  <span class="episode-dur">{{ formatDuration(page.duration ? formatSeconds(page.duration) : '') }}</span>
+                </button>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </transition>
@@ -617,6 +677,141 @@ onUnmounted(() => {
   overflow: hidden;
   position: absolute;
   inset: 0;
+}
+
+.nplayer-container.has-episodes {
+  right: 220px;
+  width: auto;
+  transition: right 0.2s ease;
+}
+
+.nplayer-container.has-episodes.episode-collapsed {
+  right: 36px;
+}
+
+/* 分集面板 */
+.episode-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 210px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 12, 20, 0.92);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0 8px 8px 0;
+  transition: width 0.2s ease;
+}
+
+.episode-panel.collapsed {
+  width: 36px;
+}
+
+.episode-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.episode-toggle {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.episode-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.episode-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.episode-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.episode-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.episode-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.episode-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+  min-width: 0;
+}
+
+.episode-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.episode-item.active {
+  background: rgba(0, 161, 214, 0.2);
+  color: #00a1d6;
+}
+
+.episode-index {
+  font-size: 11px;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.6;
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.episode-name {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.episode-dur {
+  font-size: 11px;
+  opacity: 0.45;
+  flex-shrink: 0;
 }
 
 /* 确保 NPlayer 内部元素填满容器 */
