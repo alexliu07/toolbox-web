@@ -381,27 +381,7 @@ router.get('/danmaku/v3/', async (req, res) => {
 
     // 解压数据
     let xmlData
-    try {
-      xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
-    } catch (e1) {
-      try {
-        xmlData = zlib.inflateSync(xmlBuffer).toString('utf8')
-      } catch (e2) {
-        try {
-          xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
-        } catch (e3) {
-          try {
-            xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
-          } catch (e4) {
-            try {
-              xmlData = zlib.brotliDecompressSync(xmlBuffer).toString('utf8')
-            } catch (e5) {
-              xmlData = xmlBuffer.toString('utf8')
-            }
-          }
-        }
-      }
-    }
+    xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
 
     // 解析 XML 并转换为 DPlayer 格式
     const danmakuList = []
@@ -416,8 +396,8 @@ router.get('/danmaku/v3/', async (req, res) => {
         let type = 0
         if (rawType === 4) type = 2
         else if (rawType === 5) type = 1
-        const color = parseInt(attrs[2]) || 16777215
-        const author = attrs[3] || 'anonymous'
+        const color = parseInt(attrs[3]) || 16777215
+        const author = attrs[6] || 'anonymous'
         danmakuList.push([time, type, color, author, text.trim()])
       }
     }
