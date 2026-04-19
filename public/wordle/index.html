@@ -5,6 +5,17 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 
+	<!-- Polyfills for old WebViews -->
+	<script>
+	if (!Promise.withResolvers) {
+		Promise.withResolvers = function() {
+			let resolve, reject;
+			const promise = new Promise(function(r, rj) { resolve = r; reject = rj; });
+			return { promise: promise, resolve: resolve, reject: reject };
+		};
+	}
+	</script>
+
 	<meta name="theme-color" content="#6aaa64" />
 	<link rel="manifest" href="manifest.json">
 	<link rel="shortcut icon" href="img/logo_32x32.png" type="image/x-icon">
@@ -43,11 +54,34 @@
 	
 	<!-- changed to something more suited to being the title of a tab in App.svelte. This title is for SEO -->
 	<title>Infinite wordle - Play unlimited wordles | Wordle+</title>
-  <script type="module" crossorigin src="/wordle/index-v1.5.3.js"></script>
+  <script type="module" src="/wordle/index-v1.5.3.js"></script>
   <link rel="stylesheet" href="/wordle/index-v1.5.3.css">
 </head>
 
 <body>
+	<div id="debug-panel" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#fff;z-index:9999;overflow:auto;padding:16px;font-family:monospace;font-size:12px;"></div>
+	<script>
+	if (new URLSearchParams(location.search).get('debug') === '1') {
+		var panel = document.getElementById('debug-panel');
+		panel.style.display = 'block';
+		var origError = window.onerror;
+		var origConsole = {};
+		['log','warn','error','info'].forEach(function(m) {
+			origConsole[m] = console[m].bind(console);
+			console[m] = function() {
+				var msg = Array.from(arguments).map(function(a) {
+					return typeof a === 'object' ? JSON.stringify(a) : String(a);
+				}).join(' ');
+				panel.innerHTML += '<p>[' + m + '] ' + msg + '</p>';
+				origConsole[m].apply(console, arguments);
+			};
+		});
+		window.onerror = function(msg, src, line, col) {
+			panel.innerHTML += '<p>[error] ' + msg + ' (' + src + ':' + line + ':' + col + ')</p>';
+			if (origError) origError.apply(null, arguments);
+		};
+	}
+	</script>
 </body>
 
 </html>
