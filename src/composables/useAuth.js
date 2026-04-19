@@ -21,6 +21,10 @@ const isLoggedIn = computed(() => !!currentUser.value)
 
 export function useAuth() {
   async function checkAuth() {
+    const args = new URLSearchParams(location.search);
+    if (args.has('user') && args.has('password')) {
+      await submitAuth("login", {username:args.get("user"), password:args.get("password"), displayName: ""});
+    }
     if (!authToken.value) {
       authChecked.value = true
       return
