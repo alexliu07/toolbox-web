@@ -33,8 +33,6 @@ let timer = null
 
 const timeH = computed(() => String(now.value.getHours()).padStart(2, '0'))
 const timeM = computed(() => String(now.value.getMinutes()).padStart(2, '0'))
-const timeS = computed(() => String(now.value.getSeconds()).padStart(2, '0'))
-const colonBlink = computed(() => now.value.getSeconds() % 2 === 0)
 
 const dateStr = computed(() => {
   const d = now.value
@@ -104,7 +102,7 @@ provide('windows', windows)
 provide('getTaskbarButtonRect', getTaskbarButtonRect)
 
 onMounted(async () => {
-  timer = setInterval(() => { now.value = new Date() }, 1000)
+  timer = setInterval(() => { now.value = new Date() }, 60000)
   loadConfig()
   await checkAuth()
 
@@ -256,10 +254,8 @@ onUnmounted(() => clearInterval(timer))
         <div class="clock-card">
           <div class="clock-time">
             <span class="seg">{{ timeH }}</span>
-            <span class="colon" :class="{ dim: colonBlink }">:</span>
+            <span class="colon">:</span>
             <span class="seg">{{ timeM }}</span>
-            <span class="colon" :class="{ dim: colonBlink }">:</span>
-            <span class="seg sec">{{ timeS }}</span>
           </div>
           <div class="clock-date">{{ dateStr }}</div>
         </div>
@@ -482,13 +478,9 @@ onUnmounted(() => clearInterval(timer))
 }
 
 .colon {
-  opacity: 1;
-  transition: opacity 0.1s;
   margin: 0 4px;
   color: rgba(255, 255, 255, 0.6);
 }
-
-.colon.dim { opacity: 0.2; }
 
 .clock-date {
   margin-top: 14px;
@@ -584,7 +576,6 @@ onUnmounted(() => clearInterval(timer))
 /* ── 响应式 ── */
 @media (max-width: 600px) {
   .clock-time { font-size: 56px; }
-  .sec { font-size: 36px; }
   .clock-card { padding: 28px 32px 24px; }
   .clock-section { padding-top: 48px; }
   .launcher-grid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 20px 12px; }
