@@ -4,6 +4,9 @@ import http from 'http'
 import crypto from 'crypto'
 import { URL } from 'url'
 import zlib from 'zlib'
+import { requireAuth, optionalAuth } from '../middleware/auth.js'
+import { getBilibiliCredentials, saveBilibiliCredentials, deleteBilibiliCredentials } from '../db.js'
+import QRCode from 'qrcode'
 
 const router = express.Router()
 
@@ -79,6 +82,18 @@ async function fetchWbiKeys() {
   }
 }
 
+// 获取用户 Bilibili cookie 字符串
+function getCookiesString(userId) {
+  if (!userId) return undefined
+  try {
+    const cred = getBilibiliCredentials(userId)
+    if (!cred?.cookies) return undefined
+    return Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+  } catch {
+    return undefined
+  }
+}
+
 // 通用 HTTP 请求函数
 function fetchUrl(targetUrl, params, options = {}) {
   return new Promise((resolve, reject) => {
@@ -86,7 +101,7 @@ function fetchUrl(targetUrl, params, options = {}) {
     const isHttps = urlObj.protocol === 'https:'
     const httpModule = isHttps ? https : http
 
-    const queryParams = new URLSearchParams()
+    const queryParams = new URLSearchParams(urlObj.search)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null) {
         queryParams.append(k, v)
@@ -104,6 +119,7 @@ function fetchUrl(targetUrl, params, options = {}) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://www.bilibili.com',
         'Origin': 'https://www.bilibili.com',
+        ...(options.cookies ? { 'Cookie': options.cookies } : {}),
         ...options.headers
       },
       timeout: 15000
@@ -115,6 +131,15 @@ function fetchUrl(targetUrl, params, options = {}) {
       res.on('end', () => {
         const buffer = Buffer.concat(chunks)
         const contentType = res.headers['content-type'] || ''
+        if (options.rawResponse) {
+          let body
+          if (contentType.includes('application/json') || contentType.includes('text/plain')) {
+            try { body = JSON.parse(buffer.toString()) } catch { body = buffer.toString() }
+          } else {
+            body = buffer.toString()
+          }
+          return resolve({ statusCode: res.statusCode, headers: res.headers, body })
+        }
         if (contentType.includes('application/json') || contentType.includes('text/plain')) {
           try {
             resolve(JSON.parse(buffer.toString()))
@@ -137,8 +162,128 @@ function fetchUrl(targetUrl, params, options = {}) {
   })
 }
 
+// ── 登录相关端点 ──
+
+// GET /login/qr/generate — 生成二维码
+router.get('/login/qr/generate', requireAuth, async (req, res) => {
+  try {
+    const data = await fetchUrl('https://passport.bilibili.com/x/passport-login/web/qrcode/generate', {})
+    if (data.code !== 0 || !data.data?.url) {
+      return res.status(502).json({ error: 'Failed to generate QR code', code: data.code })
+    }
+    const qrimg = await QRCode.toDataURL(data.data.url, { width: 200, margin: 2 })
+    res.json({ qrcode_key: data.data.qrcode_key, qrimg })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /login/qr/poll — 轮询扫码状态
+// B站API: 顶层 code 永远为 0，实际扫码状态在 data.code
+// data.code: 86101=未扫码, 86090=已扫码未确认, 0=登录成功, 86038=二维码失效
+router.get('/login/qr/poll', requireAuth, async (req, res) => {
+  const { qrcode_key } = req.query
+  if (!qrcode_key) return res.status(400).json({ error: 'qrcode_key required' })
+  try {
+    const resp = await fetchUrl(
+      `https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcode_key)}`,
+      {}, { rawResponse: true }
+    )
+    const body = resp.body
+    const status = body.data?.code
+
+    if (status === 0) {
+      // 登录成功 — 从 Set-Cookie 提取 cookies
+      const setCookies = resp.headers['set-cookie'] || []
+      const cookies = {}
+      for (const sc of setCookies) {
+        const match = sc.match(/^([^=]+)=([^;]*)/)
+        if (match) cookies[match[1]] = match[2]
+      }
+      // 获取用户信息
+      const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+      const navData = await fetchUrl('https://api.bilibili.com/x/web-interface/nav', {}, { cookies: cookieStr })
+      const profile = navData?.data || {}
+      saveBilibiliCredentials(req.user.id, {
+        cookies,
+        bilibili_mid: profile.mid || parseInt(cookies.DedeUserID) || null,
+        nickname: profile.uname || null,
+        avatar_url: profile.face || null,
+      })
+      return res.json({
+        code: 0, message: 'success',
+        user: { mid: profile.mid, nickname: profile.uname, avatar_url: profile.face }
+      })
+    }
+
+    // 86101=未扫码, 86090=已扫码未确认, 86038=二维码失效
+    res.json({ code: status, message: body.data?.message || body.message })
+  } catch (e) {
+    res.status(502).json({ error: 'upstream error', detail: e.message })
+  }
+})
+
+// GET /login/status — 检查登录状态
+router.get('/login/status', requireAuth, async (req, res) => {
+  try {
+    const cred = getBilibiliCredentials(req.user.id)
+    if (!cred) return res.json({ loggedIn: false })
+    try {
+      const cookieStr = Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+      const navData = await fetchUrl('https://api.bilibili.com/x/web-interface/nav', {}, { cookies: cookieStr })
+      if (navData?.data?.isLogin) {
+        const p = navData.data
+        if (p.uname !== cred.nickname || p.face !== cred.avatar_url) {
+          saveBilibiliCredentials(req.user.id, {
+            cookies: cred.cookies, bilibili_mid: p.mid,
+            nickname: p.uname, avatar_url: p.face,
+          })
+        }
+        return res.json({ loggedIn: true, mid: p.mid, nickname: p.uname, avatar_url: p.face })
+      }
+      deleteBilibiliCredentials(req.user.id)
+      return res.json({ loggedIn: false })
+    } catch (apiErr) {
+      console.warn('[bilibili] login/status upstream check failed, falling back to local:', apiErr.message)
+      return res.json({
+        loggedIn: true, mid: cred.bilibili_mid,
+        nickname: cred.nickname, avatar_url: cred.avatar_url,
+      })
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /logout — 登出
+router.post('/logout', requireAuth, async (req, res) => {
+  try {
+    const cred = getBilibiliCredentials(req.user.id)
+    if (cred?.cookies) {
+      try {
+        const cookieStr = Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+        await fetchUrl('https://passport.bilibili.com/login/exit/v2', {}, {
+          method: 'POST', cookies: cookieStr,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRF-Token': cred.cookies.bili_jct || ''
+          }
+        })
+      } catch (apiErr) {
+        console.warn('[bilibili] logout upstream call failed:', apiErr.message)
+      }
+    }
+    deleteBilibiliCredentials(req.user.id)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── 视频相关端点 ──
+
 // 搜索视频
-router.get('/search', async (req, res) => {
+router.get('/search', optionalAuth, async (req, res) => {
   try {
     const { keyword, page = 1 } = req.query
     if (!keyword) {
@@ -155,7 +300,8 @@ router.get('/search', async (req, res) => {
       tids: 0
     })
 
-    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params)
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
   } catch (e) {
     console.error('Bilibili search error:', e.message)
@@ -164,14 +310,15 @@ router.get('/search', async (req, res) => {
 })
 
 // 获取视频分页信息（获取cid）
-router.get('/pagelist', async (req, res) => {
+router.get('/pagelist', optionalAuth, async (req, res) => {
   try {
     const { bvid } = req.query
     if (!bvid) {
       return res.status(400).json({ code: -400, message: 'bvid is required' })
     }
 
-    const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid })
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid }, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
   } catch (e) {
     console.error('Bilibili pagelist error:', e.message)
@@ -180,7 +327,7 @@ router.get('/pagelist', async (req, res) => {
 })
 
 // 获取视频流地址
-router.get('/playurl', async (req, res) => {
+router.get('/playurl', optionalAuth, async (req, res) => {
   try {
     const { bvid, cid, qn = 16, fnval = 16, fnver = 0, fourk = 1 } = req.query
     if (!bvid || !cid) {
@@ -199,7 +346,9 @@ router.get('/playurl', async (req, res) => {
       high_quality: 1
     })
 
-    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params)
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
+    console.log(data)
     res.json(data)
   } catch (e) {
     console.error('Bilibili playurl error:', e.message)
@@ -519,14 +668,15 @@ router.get('/danmaku/', async (req, res) => {
 // })
 
 // 获取视频信息
-router.get('/videoinfo', async (req, res) => {
+router.get('/videoinfo', optionalAuth, async (req, res) => {
   try {
     const { bvid } = req.query
     if (!bvid) {
       return res.status(400).json({ code: -400, message: 'bvid is required' })
     }
 
-    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/view', { bvid })
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/view', { bvid }, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
   } catch (e) {
     console.error('Bilibili videoinfo error:', e.message)

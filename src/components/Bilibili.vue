@@ -57,6 +57,13 @@ const selectedQuality = ref(16)
 const loadingStream = ref(false)
 const episodeCollapsed = ref(false)
 
+// 登录状态
+const bilibiliUser = ref(null)
+const showLogin = ref(false)
+const qrCode = ref('')
+const qrStatus = ref(null)  // 'loading' | 'waiting' | 'scanned' | 'expired' | null
+let qrPollTimer = null
+
 // 格式化数字
 function formatCount(num) {
   if (!num && num !== 0) return '0'
@@ -97,6 +104,100 @@ function proxyImg(url) {
   let imgUrl = url
   if (url.startsWith('//')) imgUrl = 'https:' + url
   return `/api/bilibili/image?url=${encodeURIComponent(imgUrl)}`
+}
+
+// 头像代理
+function proxyAvatar(url) {
+  if (!url) return ''
+  let imgUrl = url
+  if (url.startsWith('//')) imgUrl = 'https:' + url
+  return `/api/bilibili/image?url=${encodeURIComponent(imgUrl)}`
+}
+
+// 检查登录状态
+async function checkLoginStatus() {
+  try {
+    const res = await authFetch('/api/bilibili/login/status')
+    const data = await res.json()
+    if (data.loggedIn) {
+      bilibiliUser.value = { mid: data.mid, nickname: data.nickname, avatar_url: data.avatar_url }
+    } else {
+      bilibiliUser.value = null
+    }
+  } catch (e) {
+    console.warn('Check bilibili login status failed:', e)
+  }
+}
+
+// 开始登录
+async function startLogin() {
+  showLogin.value = true
+  qrStatus.value = 'loading'
+  qrCode.value = ''
+  try {
+    const res = await authFetch('/api/bilibili/login/qr/generate')
+    const data = await res.json()
+    if (data.qrimg) {
+      qrCode.value = data.qrimg
+      qrStatus.value = 'waiting'
+      // 开始轮询
+      startQrPoll(data.qrcode_key)
+    } else {
+      qrStatus.value = 'expired'
+    }
+  } catch (e) {
+    console.error('Generate QR failed:', e)
+    qrStatus.value = 'expired'
+  }
+}
+
+// 轮询扫码状态
+function startQrPoll(qrcodeKey) {
+  if (qrPollTimer) clearInterval(qrPollTimer)
+  qrPollTimer = setInterval(async () => {
+    try {
+      const res = await authFetch(`/api/bilibili/login/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`)
+      const data = await res.json()
+      if (data.code === 0) {
+        // 登录成功
+        clearInterval(qrPollTimer)
+        qrPollTimer = null
+        bilibiliUser.value = data.user
+        closeLogin()
+      } else if (data.code === 86090) {
+        qrStatus.value = 'scanned'
+      } else if (data.code === 86038) {
+        // 二维码过期
+        clearInterval(qrPollTimer)
+        qrPollTimer = null
+        qrStatus.value = 'expired'
+      }
+      // 86101 = 未扫码，继续轮询
+    } catch (e) {
+      console.error('QR poll error:', e)
+    }
+  }, 2000)
+}
+
+// 关闭登录弹窗
+function closeLogin() {
+  showLogin.value = false
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer)
+    qrPollTimer = null
+  }
+  qrCode.value = ''
+  qrStatus.value = null
+}
+
+// 登出
+async function logout() {
+  try {
+    await authFetch('/api/bilibili/logout', { method: 'POST' })
+  } catch (e) {
+    console.warn('Logout error:', e)
+  }
+  bilibiliUser.value = null
 }
 
 // 新搜索（重置所有状态）
@@ -362,6 +463,7 @@ function getProxyStreamUrl(url) {
 }
 
 onMounted(() => {
+  checkLoginStatus()
   nextTick(() => {
     if (resultsRef.value) {
       resultsHeight.value = resultsRef.value.getBoundingClientRect().height
@@ -379,6 +481,10 @@ onUnmounted(() => {
   if (dp.value) {
     dp.value.dispose()
     dp.value = null
+  }
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer)
+    qrPollTimer = null
   }
 })
 </script>
@@ -441,6 +547,38 @@ onUnmounted(() => {
       </div>
     </transition>
 
+    <!-- 登录覆盖层 -->
+    <transition name="player-fade">
+      <div v-if="showLogin" class="login-overlay" @click.self="closeLogin()">
+        <div class="login-panel">
+          <div class="login-title">扫码登录哔哩哔哩</div>
+          <div class="qr-area">
+            <div v-if="qrStatus === 'loading'" class="qr-loading">
+              <div class="loading-spinner"></div>
+              <span>正在获取二维码...</span>
+            </div>
+            <template v-else>
+              <img :src="qrCode" class="qr-image" />
+              <div v-if="qrStatus === 'expired'" class="qr-expired-overlay">
+                <span>二维码已过期</span>
+                <button class="qr-refresh-btn" @click="startLogin()">点击刷新</button>
+              </div>
+              <div v-if="qrStatus === 'scanned'" class="qr-scanned-overlay">
+                <span>已扫码，请在手机上确认</span>
+              </div>
+            </template>
+          </div>
+          <div class="login-status-text">
+            <template v-if="qrStatus === 'waiting'">请使用哔哩哔哩 App 扫码</template>
+            <template v-else-if="qrStatus === 'scanned'">请在手机上确认登录</template>
+            <template v-else-if="qrStatus === 'expired'">二维码已过期</template>
+            <template v-else-if="qrStatus === 'loading'">加载中...</template>
+          </div>
+          <button class="login-cancel-btn" @click="closeLogin()">取消</button>
+        </div>
+      </div>
+    </transition>
+
     <!-- 搜索栏 -->
     <div class="search-bar">
       <input
@@ -454,6 +592,13 @@ onUnmounted(() => {
       <button class="search-btn" @click="search()" :disabled="loading">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
+      <button v-if="!bilibiliUser" class="login-btn" @click="startLogin()" title="登录哔哩哔哩">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
+      <div v-else class="user-info" @click="logout()" title="点击登出">
+        <img v-if="bilibiliUser.avatar_url" :src="proxyAvatar(bilibiliUser.avatar_url)" class="user-avatar" />
+        <span class="user-name">{{ bilibiliUser.nickname }}</span>
+      </div>
     </div>
 
     <!-- 搜索结果 -->
@@ -1080,5 +1225,169 @@ onUnmounted(() => {
 
 .results::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* 登录覆盖层 */
+.login-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  background: rgba(10, 12, 20, 0.9);
+  backdrop-filter: blur(20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-panel {
+  background: rgba(20, 22, 35, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.login-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.qr-area {
+  width: 200px;
+  height: 200px;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qr-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.qr-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+
+.qr-expired-overlay,
+.qr-scanned-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #fff;
+  font-size: 13px;
+}
+
+.qr-refresh-btn {
+  padding: 6px 16px;
+  background: rgba(0, 161, 214, 0.8);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.qr-refresh-btn:hover {
+  background: rgba(0, 161, 214, 1);
+}
+
+.login-status-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.login-cancel-btn {
+  padding: 8px 24px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.login-cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+/* 登录按钮 */
+.login-btn {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  flex-shrink: 0;
+}
+
+.login-btn:hover {
+  background: rgba(0, 161, 214, 0.2);
+  color: #00a1d6;
+  border-color: rgba(0, 161, 214, 0.3);
+}
+
+/* 用户信息 */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.user-info:hover {
+  background: rgba(0, 161, 214, 0.15);
+  border-color: rgba(0, 161, 214, 0.3);
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.user-name {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

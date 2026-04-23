@@ -115,6 +115,20 @@ export async function initDatabase() {
   `)
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS user_bilibili_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      cookies TEXT NOT NULL,
+      bilibili_mid INTEGER,
+      nickname TEXT,
+      avatar_url TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id)
+    )
+  `)
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS user_localstorage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -392,6 +406,38 @@ export function saveNeteaseCredentials(userId, { cookies, netease_uid, nickname,
 
 export function deleteNeteaseCredentials(userId) {
   db.run('DELETE FROM user_netease_credentials WHERE user_id = ?', [userId])
+  saveDatabase()
+}
+
+// ── Bilibili credentials operations ──
+
+export function getBilibiliCredentials(userId) {
+  const stmt = db.prepare('SELECT cookies, bilibili_mid, nickname, avatar_url FROM user_bilibili_credentials WHERE user_id = ?')
+  stmt.bind([userId])
+  let cred = null
+  if (stmt.step()) {
+    const row = stmt.getAsObject()
+    cred = {
+      cookies: JSON.parse(row.cookies),
+      bilibili_mid: row.bilibili_mid,
+      nickname: row.nickname,
+      avatar_url: row.avatar_url,
+    }
+  }
+  stmt.free()
+  return cred
+}
+
+export function saveBilibiliCredentials(userId, { cookies, bilibili_mid, nickname, avatar_url }) {
+  db.run(
+    "INSERT OR REPLACE INTO user_bilibili_credentials (user_id, cookies, bilibili_mid, nickname, avatar_url, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+    [userId, JSON.stringify(cookies), bilibili_mid || null, nickname || null, avatar_url || null]
+  )
+  saveDatabase()
+}
+
+export function deleteBilibiliCredentials(userId) {
+  db.run('DELETE FROM user_bilibili_credentials WHERE user_id = ?', [userId])
   saveDatabase()
 }
 
