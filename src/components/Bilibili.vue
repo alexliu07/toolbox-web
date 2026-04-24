@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, inject, onMounted, onUnmounted, shallowRef, markRaw } from 'vue'
 import NPlayer from 'nplayer'
 import Danmaku from '@nplayer/danmaku'
+import {MediaPlayer} from 'dashjs'
 
 const authFetch = inject('authFetch')
 
@@ -51,9 +52,6 @@ let dp = shallowRef(null)
 let playerResizeObserver = null
 const showPlayer = ref(false)
 
-// 画质选项: { qn: 数字, desc: 描述 }
-const qualityOptions = ref([])
-const selectedQuality = ref(16)
 const loadingStream = ref(false)
 const episodeCollapsed = ref(false)
 
@@ -332,11 +330,9 @@ async function initNPlayer() {
 
     const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true})
 
-    dp.value = markRaw(new NPlayer({
-      src: videoUrl,
-      autoplay: true,
-      plugins: [danmaku],
-    }))
+    const player = new NPlayer({plugins: [danmaku]})
+    MediaPlayer().create().initialize(player.video,videoUrl,true)
+    dp.value = markRaw(player)
 
     dp.value.on('play', () => { isPlaying.value = true })
     dp.value.on('pause', () => { isPlaying.value = false })
@@ -366,8 +362,7 @@ async function fetchStreamUrl() {
   if (!currentBvid.value || !currentCid.value) return
 
   try {
-    // fnval=1 返回 FLV/MP4 格式，支持拖动
-    const res = await authFetch(`/api/bilibili/playurl?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}&qn=${selectedQuality.value}&fnval=1&fourk=1`)
+    const res = await authFetch(`/api/bilibili/playurl?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}&fnval=4048&fourk=1`)
     const data = await res.json()
     if (data.code !== 0) {
       throw new Error(data.message || '获取播放地址失败')
@@ -376,22 +371,13 @@ async function fetchStreamUrl() {
     videoInfo.value = data.data
 
     // 解析 FLV/MP4 流
-    if (data.data.durl && data.data.durl.length > 0) {
-      streamUrl.value = data.data.durl[0]?.url || ''
-    } else {
-      streamUrl.value = ''
-    }
-
-    // 更新画质选项 (qn: 数字, desc: 描述)
-    const qnList = data.data.accept_quality || []
-    const descList = data.data.accept_description || []
-    qualityOptions.value = qnList.map((qn, i) => ({
-      qn,
-      desc: descList[i] || `${qn}p`
-    }))
-    // 实际返回的画质（API 可能降级）
-    const actualQn = data.data.quality
-    if (actualQn) selectedQuality.value = actualQn
+    streamUrl.value = data.data.dash.video[0].baseUrl
+    console.log(data.data.dash.video[0].baseUrl)
+    // if (data.data.dash?.video[0].baseUrl && data.data.dash?.video[0].baseUrl > 0) {
+    //    = data.data.dash?.video[0].baseUrl || ''
+    // } else {
+    //   streamUrl.value = ''
+    // }
 
     // 等待 DOM 更新后初始化 NPlayer
     nextTick(() => {
@@ -407,17 +393,6 @@ async function fetchStreamUrl() {
     console.error('Fetch stream URL error:', e)
     loadingStream.value = false
   }
-}
-
-async function changeQuality() {
-  if (!currentBvid.value || !currentCid.value) return
-  loadingStream.value = true
-  isPlaying.value = false
-  if (dp.value) {
-    dp.value.dispose()
-    dp.value = null
-  }
-  await fetchStreamUrl()
 }
 
 function closePlayer() {
@@ -502,9 +477,6 @@ onUnmounted(() => {
             <span class="player-stat">{{ formatCount(currentVideo.favorites) }}收藏</span>
           </div>
           <div class="player-controls">
-            <select v-model="selectedQuality" class="quality-select" @change="changeQuality" :disabled="loadingStream">
-              <option v-for="q in qualityOptions" :key="q.qn" :value="q.qn">{{ q.desc }}</option>
-            </select>
             <button class="player-close-btn" @click="closePlayer()" title="关闭">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
@@ -746,22 +718,6 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-}
-
-.quality-select {
-  padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  color: #fff;
-  font-size: 12px;
-  cursor: pointer;
-  outline: none;
-}
-
-.quality-select option {
-  background: #1a1a2e;
-  color: #fff;
 }
 
 .player-close-btn {

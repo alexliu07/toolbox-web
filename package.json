@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@nplayer/danmaku": "^1.0.12",
+    "dashjs": "^5.1.1",
     "docx-preview": "^0.3.7",
     "nplayer": "^1.0.15",
     "pptx-viewer": "^0.2.2",

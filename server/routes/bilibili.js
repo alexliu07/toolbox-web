@@ -340,15 +340,13 @@ router.get('/playurl', optionalAuth, async (req, res) => {
       cid: parseInt(cid),
       qn: parseInt(qn),
       fnval: parseInt(fnval),
-      fnver: parseInt(fnver),
-      fourk: parseInt(fourk),
-      platform: 'html5',
-      high_quality: 1
+      fourk: parseInt(fourk)
     })
 
     const cookieStr = getCookiesString(req.user?.id)
+    console.log(params)
+    console.log(cookieStr)
     const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
-    console.log(data)
     res.json(data)
   } catch (e) {
     console.error('Bilibili playurl error:', e.message)
