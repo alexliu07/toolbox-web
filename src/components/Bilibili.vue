@@ -288,10 +288,6 @@ async function playVideo(video) {
     closePlayer()
   }
 }
-function toAbsoluteUrl(path) {
-  if (path.startsWith('http')) return path
-  return window.location.origin + path
-}
 
 // 初始化 NPlayer + dash.js
 async function initNPlayer() {
@@ -309,9 +305,6 @@ async function initNPlayer() {
       setTimeout(initNPlayer, 100)
       return
     }
-
-    // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
-
 
     // 获取弹幕
     let danmakuItems = []
@@ -339,7 +332,7 @@ async function initNPlayer() {
 
     // 使用 dash.js 加载后端生成的 MPD 清单
     dashPlayerInstance = MediaPlayer().create()
-    dashPlayerInstance.initialize(player.video, toAbsoluteUrl(streamUrl.value), true)
+    dashPlayerInstance.initialize(player.video, streamUrl.value, true)
 
     dp.value = markRaw(player)
 
@@ -371,6 +364,7 @@ async function initNPlayer() {
 async function fetchStreamUrl() {
   if (!currentBvid.value || !currentCid.value) return
   try {
+    // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
     streamUrl.value = `/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`
 
     // 等待 DOM 更新后初始化 NPlayer
