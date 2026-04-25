@@ -344,32 +344,6 @@ router.get('/pagelist', optionalAuth, async (req, res) => {
   }
 })
 
-// 获取视频流地址
-router.get('/playurl', optionalAuth, async (req, res) => {
-  try {
-    const { bvid, cid, qn = 16, fnval = 16, fnver = 0, fourk = 1 } = req.query
-    if (!bvid || !cid) {
-      return res.status(400).json({ code: -400, message: 'bvid and cid are required' })
-    }
-
-    await fetchWbiKeys()
-    const params = signWBI({
-      bvid: bvid,
-      cid: parseInt(cid),
-      qn: parseInt(qn),
-      fnval: parseInt(fnval),
-      fourk: parseInt(fourk)
-    })
-
-    const cookieStr = getCookiesString(req.user?.id)
-    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
-    res.json(data)
-  } catch (e) {
-    console.error('Bilibili playurl error:', e.message)
-    res.status(500).json({ code: -500, message: e.message })
-  }
-})
-
 // 生成 MPD 清单文件（供 dash.js 播放）
 router.get('/mpd', optionalAuth, async (req, res) => {
   try {
@@ -409,7 +383,6 @@ router.get('/mpd', optionalAuth, async (req, res) => {
     const proxyAudioUrl = audioAdapt ? `${streamBase}?url=${encodeURIComponent(audioAdapt.baseUrl)}` : ''
 
     // 构建 MPD — 使用 SegmentBase + indexRange，代理自动处理 416 重试
-    // indexRange 和 Initialization range 必须有明确的结束偏移（dash.js 不接受 "0-"）
     const codecsVideo = videoAdapt.codecs || 'avc1.640032'
     const bandwidthVideo = videoAdapt.bandwidth || 1000000
     const widthVideo = videoAdapt.width || 1920
@@ -546,12 +519,6 @@ router.get('/stream', optionalAuth, async (req, res) => {
       }
 
       const proxyReq = httpModule.request(options, (proxyRes) => {
-
-        console.log('[proxy] status:', proxyRes.statusCode)
-        console.log('[proxy] content-range:', proxyRes.headers['content-range'])
-        console.log('[proxy] accept-ranges:', proxyRes.headers['accept-ranges'])
-        console.log('[proxy] content-length:', proxyRes.headers['content-length'])
-
         // 正常响应（200 或 206）→ 直接 pipe
         const contentType = proxyRes.headers['content-type'] || 'video/mp4'
 
