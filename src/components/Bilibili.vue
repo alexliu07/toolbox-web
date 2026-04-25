@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, inject, onMounted, onUnmounted, shallowRef, markRaw } from 'vue'
 import NPlayer from 'nplayer'
 import Danmaku from '@nplayer/danmaku'
-import {MediaPlayer} from 'dashjs'
+import { MediaPlayer } from 'dashjs'
 
 const authFetch = inject('authFetch')
 
@@ -41,7 +41,6 @@ const currentBvid = ref('')
 const currentCid = ref('')
 const videoInfo = ref(null)
 const streamUrl = ref('')
-const audioUrl = ref('')
 const danmakuOid = ref('')
 const pageList = ref([])
 const currentPageIndex = ref(0)
@@ -49,6 +48,7 @@ const isPlaying = ref(false)
 const playerContainerRef = ref(null)
 // 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
 let dp = shallowRef(null)
+let dashPlayerInstance = null
 let playerResizeObserver = null
 const showPlayer = ref(false)
 
@@ -267,7 +267,6 @@ async function playVideo(video) {
   loadingStream.value = true
   isPlaying.value = false
   streamUrl.value = ''
-  audioUrl.value = ''
 
   try {
     // 获取视频分页列表（获取cid）
@@ -289,8 +288,12 @@ async function playVideo(video) {
     closePlayer()
   }
 }
+function toAbsoluteUrl(path) {
+  if (path.startsWith('http')) return path
+  return window.location.origin + path
+}
 
-// 初始化 NPlayer
+// 初始化 NPlayer + dash.js
 async function initNPlayer() {
   try {
     if (dp.value) {
@@ -307,7 +310,8 @@ async function initNPlayer() {
       return
     }
 
-    const videoUrl = getProxyStreamUrl(streamUrl.value)
+    // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
+    const mpdUrl = `/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`
 
     // 获取弹幕
     let danmakuItems = []
@@ -328,10 +332,15 @@ async function initNPlayer() {
       }
     }
 
-    const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true})
+    const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true })
 
-    const player = new NPlayer({plugins: [danmaku]})
-    MediaPlayer().create().initialize(player.video,videoUrl,true)
+    // 创建 NPlayer
+    const player = new NPlayer({plugins: [danmaku] })
+
+    // 使用 dash.js 加载后端生成的 MPD 清单
+    dashPlayerInstance = MediaPlayer().create()
+    dashPlayerInstance.initialize(player.video, toAbsoluteUrl(mpdUrl), true)
+
     dp.value = markRaw(player)
 
     dp.value.on('play', () => { isPlaying.value = true })
@@ -339,6 +348,7 @@ async function initNPlayer() {
     dp.value.on('ended', () => { isPlaying.value = false })
 
     dp.value.mount(playerContainerRef.value)
+
 
     // 修复窗口动画完成前容器宽度为 0 导致弹幕不滚动
     setTimeout(() => {
@@ -352,7 +362,7 @@ async function initNPlayer() {
     })
     playerResizeObserver.observe(playerContainerRef.value)
 
-    console.log('NPlayer initialized successfully')
+    console.log('NPlayer + dash.js initialized')
   } catch (e) {
     console.error('initNPlayer error:', e)
   }
@@ -369,20 +379,12 @@ async function fetchStreamUrl() {
     }
 
     videoInfo.value = data.data
-
-    // 解析 FLV/MP4 流
-    streamUrl.value = data.data.dash.video[0].baseUrl
-    console.log(data.data.dash.video[0].baseUrl)
-    // if (data.data.dash?.video[0].baseUrl && data.data.dash?.video[0].baseUrl > 0) {
-    //    = data.data.dash?.video[0].baseUrl || ''
-    // } else {
-    //   streamUrl.value = ''
-    // }
+    const dash = data.data.dash
+    streamUrl.value = dash.video[0].baseUrl
 
     // 等待 DOM 更新后初始化 NPlayer
     nextTick(() => {
       initNPlayer()
-      // 等待 NPlayer 内部渲染完成后再隐藏 loading
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           loadingStream.value = false
@@ -397,6 +399,10 @@ async function fetchStreamUrl() {
 
 function closePlayer() {
   showPlayer.value = false
+  if (dashPlayerInstance) {
+    dashPlayerInstance.reset()
+    dashPlayerInstance = null
+  }
   if (playerResizeObserver) {
     playerResizeObserver.disconnect()
     playerResizeObserver = null
@@ -410,7 +416,6 @@ function closePlayer() {
   currentBvid.value = ''
   currentCid.value = ''
   streamUrl.value = ''
-  audioUrl.value = ''
   danmakuOid.value = ''
   pageList.value = []
   currentPageIndex.value = 0
@@ -425,16 +430,15 @@ async function switchEpisode(index) {
   danmakuOid.value = page.cid
   loadingStream.value = true
   isPlaying.value = false
+  if (dashPlayerInstance) {
+    dashPlayerInstance.reset()
+    dashPlayerInstance = null
+  }
   if (dp.value) {
     dp.value.dispose()
     dp.value = null
   }
   await fetchStreamUrl()
-}
-
-function getProxyStreamUrl(url) {
-  if (!url) return ''
-  return `/api/bilibili/stream?url=${encodeURIComponent(url)}`
 }
 
 onMounted(() => {

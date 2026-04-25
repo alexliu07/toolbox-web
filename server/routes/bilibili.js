@@ -10,6 +10,11 @@ import QRCode from 'qrcode'
 
 const router = express.Router()
 
+// XML 转义（MPD 清单中的 URL 可能包含特殊字符）
+function escapeXml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+}
+
 // 弹幕内存缓存 (参考 DPlayer-node)
 const danmakuCache = new Map()
 
@@ -30,6 +35,7 @@ const MIME_MAP = {
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
   '.m4s': 'video/mp4',
+  '.mpd': 'application/dash+xml',
   '.webm': 'video/webm',
   '.flv': 'video/x-flv',
   '.mp3': 'audio/mpeg',
@@ -130,26 +136,38 @@ function fetchUrl(targetUrl, params, options = {}) {
       res.on('data', chunk => chunks.push(chunk))
       res.on('end', () => {
         const buffer = Buffer.concat(chunks)
+
+        // 解压 Content-Encoding (gzip / deflate / br)
+        let decoded = buffer
+        const encoding = res.headers['content-encoding']
+        if (encoding === 'gzip') {
+          try { decoded = zlib.gunzipSync(buffer) } catch {}
+        } else if (encoding === 'deflate') {
+          try { decoded = zlib.inflateSync(buffer) } catch {}
+        } else if (encoding === 'br') {
+          try { decoded = zlib.brotliDecompressSync(buffer) } catch {}
+        }
+
         const contentType = res.headers['content-type'] || ''
         if (options.rawResponse) {
           let body
           if (contentType.includes('application/json') || contentType.includes('text/plain')) {
-            try { body = JSON.parse(buffer.toString()) } catch { body = buffer.toString() }
+            try { body = JSON.parse(decoded.toString()) } catch { body = decoded.toString() }
           } else {
-            body = buffer.toString()
+            body = decoded.toString()
           }
           return resolve({ statusCode: res.statusCode, headers: res.headers, body })
         }
         if (contentType.includes('application/json') || contentType.includes('text/plain')) {
           try {
-            resolve(JSON.parse(buffer.toString()))
+            resolve(JSON.parse(decoded.toString()))
           } catch {
-            resolve(buffer.toString())
+            resolve(decoded.toString())
           }
         } else if (contentType.includes('image') || options.responseType === 'buffer') {
           resolve(buffer)
         } else {
-          resolve(buffer.toString())
+          resolve(decoded.toString())
         }
       })
     })
@@ -344,12 +362,88 @@ router.get('/playurl', optionalAuth, async (req, res) => {
     })
 
     const cookieStr = getCookiesString(req.user?.id)
-    console.log(params)
-    console.log(cookieStr)
     const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
   } catch (e) {
     console.error('Bilibili playurl error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 生成 MPD 清单文件（供 dash.js 播放）
+router.get('/mpd', optionalAuth, async (req, res) => {
+  try {
+    const { bvid, cid } = req.query
+    if (!bvid || !cid) {
+      return res.status(400).json({ code: -400, message: 'bvid and cid are required' })
+    }
+
+    await fetchWbiKeys()
+    const params = signWBI({
+      bvid: bvid,
+      cid: parseInt(cid),
+      qn: 64,
+      fnval: 4048,
+      fourk: 1
+    })
+
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
+
+    if (data.code !== 0) {
+      return res.status(502).json({ code: data.code, message: data.message || 'playurl error' })
+    }
+
+    const dash = data.data?.dash
+    if (!dash || !dash.video?.length) {
+      return res.status(502).json({ code: -502, message: 'no DASH streams' })
+    }
+
+    const duration = dash.duration || 0
+    const videoAdapt = dash.video[0]
+    const audioAdapt = dash.audio?.[0] || null
+
+    // 构建代理 URL（绝对路径，dash.js 会直接请求这些 URL）
+    const streamBase = '/api/bilibili/stream'
+    const proxyVideoUrl = `${streamBase}?url=${encodeURIComponent(videoAdapt.baseUrl)}`
+    const proxyAudioUrl = audioAdapt ? `${streamBase}?url=${encodeURIComponent(audioAdapt.baseUrl)}` : ''
+
+    // 构建 MPD — 使用 SegmentBase + indexRange，代理自动处理 416 重试
+    // indexRange 和 Initialization range 必须有明确的结束偏移（dash.js 不接受 "0-"）
+    const codecsVideo = videoAdapt.codecs || 'avc1.640032'
+    const bandwidthVideo = videoAdapt.bandwidth || 1000000
+    const widthVideo = videoAdapt.width || 1920
+    const heightVideo = videoAdapt.height || 1080
+
+    let adaptationSets = `
+    <AdaptationSet mimeType="video/mp4" codecs="${codecsVideo}" width="${widthVideo}" height="${heightVideo}" bandwidth="${bandwidthVideo}">
+      <Representation id="1" bandwidth="${bandwidthVideo}" codecs="${codecsVideo}" width="${widthVideo}" height="${heightVideo}">
+        <BaseURL>${escapeXml(proxyVideoUrl)}</BaseURL>
+      </Representation>
+    </AdaptationSet>`
+
+    if (audioAdapt && proxyAudioUrl) {
+      const codecsAudio = audioAdapt.codecs || 'mp4a.40.2'
+      const bandwidthAudio = audioAdapt.bandwidth || 128000
+      adaptationSets += `
+    <AdaptationSet mimeType="audio/mp4" codecs="${codecsAudio}" bandwidth="${bandwidthAudio}">
+      <Representation id="2" bandwidth="${bandwidthAudio}" codecs="${codecsAudio}">
+        <BaseURL>${escapeXml(proxyAudioUrl)}</BaseURL>
+      </Representation>
+    </AdaptationSet>`
+    }
+
+    const mpdXml = `<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" mediaPresentationDuration="PT${duration}S" minBufferTime="PT1.5S">
+  <Period>
+    ${adaptationSets}
+  </Period>
+</MPD>`
+
+    res.setHeader('Content-Type', 'application/dash+xml')
+    res.send(mpdXml)
+  } catch (e) {
+    console.error('MPD generation error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
   }
 })
@@ -407,8 +501,15 @@ router.get('/image', async (req, res) => {
 })
 
 // 视频流代理
-router.get('/stream', async (req, res) => {
+router.get('/stream', optionalAuth, async (req, res) => {
   try {
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Headers', 'Range')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+      res.status(204).end()
+      return
+    }
     const { url } = req.query
     if (!url) {
       return res.status(400).json({ code: -400, message: 'url is required' })
@@ -422,65 +523,64 @@ router.get('/stream', async (req, res) => {
     const urlObj = new URL(targetUrl)
     const isHttps = urlObj.protocol === 'https:'
     const httpModule = isHttps ? https : http
-
+    const cookieStr = getCookiesString(req.user?.id)
     const rangeHeader = req.headers['range']
-    const options = {
-      hostname: urlObj.hostname,
-      port: urlObj.port || (isHttps ? 443 : 80),
-      path: urlObj.pathname + urlObj.search,
-      method: 'GET',
-      headers: {
+
+    function makeRequest(includeRange) {
+      const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://www.bilibili.com',
-        'Origin': 'https://www.bilibili.com'
+        'Origin': 'https://www.bilibili.com',
+        ...(cookieStr ? { 'Cookie': cookieStr } : {})
       }
-    }
+      if (includeRange && rangeHeader) {
+        headers['Range'] = rangeHeader
+      }
 
-    // 如果有 Range header，添加到请求中
-    if (rangeHeader) {
-      options.headers['Range'] = rangeHeader
-    }
+      const options = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (isHttps ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: 'GET',
+        headers
+      }
 
-    const proxyReq = httpModule.request(options, (proxyRes) => {
-      const statusCode = proxyRes.statusCode
+      const proxyReq = httpModule.request(options, (proxyRes) => {
 
-      res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'video/mp4')
-      res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Headers', 'Range')
+        console.log('[proxy] status:', proxyRes.statusCode)
+        console.log('[proxy] content-range:', proxyRes.headers['content-range'])
+        console.log('[proxy] accept-ranges:', proxyRes.headers['accept-ranges'])
+        console.log('[proxy] content-length:', proxyRes.headers['content-length'])
 
-      // 处理 Range 响应
-      if (statusCode === 206) {
+        // 正常响应（200 或 206）→ 直接 pipe
+        const contentType = proxyRes.headers['content-type'] || 'video/mp4'
+
+        res.status(proxyRes.statusCode)
+        res.setHeader('Content-Type', contentType)
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Access-Control-Allow-Headers', 'Range')
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
         if (proxyRes.headers['content-range']) {
           res.setHeader('Content-Range', proxyRes.headers['content-range'])
         }
-        res.setHeader('Accept-Ranges', 'bytes')
+        res.setHeader('Accept-Ranges', proxyRes.headers['accept-ranges'] || 'bytes')
         if (proxyRes.headers['content-length']) {
           res.setHeader('Content-Length', proxyRes.headers['content-length'])
         }
-      }
+        proxyRes.pipe(res)
+      })
 
-      // 处理 200 响应（无 Range 或 Range 无效）
-      if (statusCode === 200) {
-        res.setHeader('Accept-Ranges', 'bytes')
-        if (proxyRes.headers['content-length']) {
-          res.setHeader('Content-Length', proxyRes.headers['content-length'])
+      proxyReq.on('error', (e) => {
+        console.error('Stream proxy error:', e.message)
+        if (!res.headersSent) {
+          res.status(500).json({ code: -500, message: e.message })
         }
-      }
+      })
 
-      // 设置正确的状态码
-      res.status(statusCode)
+      proxyReq.end()
+    }
 
-      proxyRes.pipe(res)
-    })
-
-    proxyReq.on('error', (e) => {
-      console.error('Stream proxy error:', e.message)
-      if (!res.headersSent) {
-        res.status(500).json({ code: -500, message: e.message })
-      }
-    })
-
-    proxyReq.end()
+    makeRequest(true)
   } catch (e) {
     console.error('Stream proxy error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
@@ -557,113 +657,6 @@ router.get('/danmaku/', async (req, res) => {
     res.json({ code: 1, msg: e.message })
   }
 })
-
-// DPlayer 弹幕 API - GET /api/bilibili/danmaku/:id (直接格式)
-// 参考 DPlayer-node: https://github.com/MoePlayer/DPlayer-node
-// router.get('/danmaku/:id', async (req, res) => {
-//   try {
-//     const id = req.params.id
-//     if (!id) {
-//       return res.json({ code: 1, msg: 'id is required' })
-//     }
-//     console.log(id)
-//     // 检查内存缓存
-//     const cached = danmakuCache.get(id)
-//     if (cached) {
-//       console.log(`Danmaku cache hit: ${id}`)
-//       return res.json({ code: 0, data: cached })
-//     }
-//
-//     // 获取 Bilibili 弹幕 XML
-//     const options = {
-//       hostname: 'comment.bilibili.com',
-//       port: 443,
-//       path: `/${id}.xml`,
-//       method: 'GET',
-//       headers: {
-//         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-//         'Referer': 'https://www.bilibili.com',
-//         'Accept-Encoding': 'deflate, gzip, br'
-//       }
-//     }
-//
-//     const xmlBuffer = await new Promise((resolve, reject) => {
-//       const proxyReq = https.request(options, (proxyRes) => {
-//         console.log('Danmaku response headers:', JSON.stringify(proxyRes.headers))
-//         const chunks = []
-//         proxyRes.on('data', chunk => chunks.push(chunk))
-//         proxyRes.on('end', () => resolve(Buffer.concat(chunks)))
-//       })
-//       proxyReq.on('error', reject)
-//       proxyReq.end()
-//     })
-//
-//     console.log('Danmaku raw buffer:', xmlBuffer.length, 'bytes, first bytes:', xmlBuffer.slice(0, 30).toString('hex'))
-//
-//     // 解压数据 - 使用流式解压更可靠
-//     let xmlData
-//     try {
-//       // 首先尝试 raw inflate（无 header）
-//       xmlData = zlib.inflateRawSync(xmlBuffer).toString('utf8')
-//     } catch (e1) {
-//       try {
-//         // 尝试 inflate（带 header）
-//         xmlData = zlib.inflateSync(xmlBuffer).toString('utf8')
-//       } catch (e2) {
-//         try {
-//           // 尝试 gzip
-//           xmlData = zlib.gunzipSync(xmlBuffer).toString('utf8')
-//         } catch (e3) {
-//           try {
-//             // 尝试 unzip
-//             xmlData = zlib.unzipSync(xmlBuffer).toString('utf8')
-//           } catch (e4) {
-//             // 尝试 Brotli
-//             try {
-//               xmlData = zlib.brotliDecompressSync(xmlBuffer).toString('utf8')
-//             } catch (e5) {
-//               xmlData = xmlBuffer.toString('utf8')
-//             }
-//           }
-//         }
-//       }
-//     }
-//
-//     // 解析 XML 并转换为 DPlayer 格式
-//     // DPlayer 格式: [time, type, color, author, text]
-//     // type: 0=滚动, 1=顶部, 2=底部
-//     console.log('Danmaku decompressed XML (first 200 chars):', xmlData.slice(0, 200))
-//
-//     const danmakuList = []
-//     const dMatches = xmlData.matchAll(/<d p="([^"]+)">([^<]+)<\/d>/g)
-//     for (const match of dMatches) {
-//       const p = match[1]
-//       const text = match[2]
-//       const attrs = p.split(',')
-//       if (text && attrs.length >= 5) {
-//         const time = parseFloat(attrs[0]) || 0
-//         const rawType = parseInt(attrs[1]) || 1
-//         // 转换弹幕类型: 4=底部->2, 5=顶部->1, 其他->0
-//         let type = 0
-//         if (rawType === 4) type = 2  // 底部
-//         else if (rawType === 5) type = 1  // 顶部
-//         const color = parseInt(attrs[2]) || 16777215
-//         const author = attrs[3] || 'anonymous'
-//         danmakuList.push([time, type, color, author, text.trim()])
-//       }
-//     }
-//
-//     // 存入缓存 (10分钟)
-//     danmakuCache.set(id, danmakuList)
-//     setTimeout(() => danmakuCache.delete(id), 10 * 60 * 1000)
-//
-//     console.log(`Danmaku: id=${id}, count=${danmakuList.length}`)
-//     res.json({ code: 0, data: danmakuList })
-//   } catch (e) {
-//     console.error('Danmaku error:', e.message)
-//     res.json({ code: 1, msg: e.message })
-//   }
-// })
 
 // 获取视频信息
 router.get('/videoinfo', optionalAuth, async (req, res) => {
