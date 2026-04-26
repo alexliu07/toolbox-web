@@ -176,7 +176,6 @@ export function useAuth() {
     if (!res.ok) throw new Error(data.error || '操作失败')
     authToken.value = data.token
     localStorage.setItem('auth_token', data.token)
-    console.log(localStorage.getItem('auth_token'))
     currentUser.value = { username: data.username, displayName: data.displayName }
   }
 

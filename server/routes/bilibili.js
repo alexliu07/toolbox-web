@@ -757,6 +757,7 @@ router.post('/report', optionalAuth, async (req, res) => {
       aid: String(aid),
       cid: String(cid),
       progress: String(Math.floor(progress || 0)),
+      platform: 'android',
       csrf
     })
 
