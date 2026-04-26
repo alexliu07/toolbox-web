@@ -62,7 +62,7 @@ const qrStatus = ref(null)  // 'loading' | 'waiting' | 'scanned' | 'expired' | n
 let qrPollTimer = null
 
 // 页面切换
-const activeTab = ref('search') // 'search' | 'history'
+const activeTab = ref('search') // 'search' | 'history' | 'toview'
 
 // 历史记录状态
 const historyPage = ref(1)
@@ -71,6 +71,13 @@ const historyCursors = ref([{ max: 0, business: '', view_at: 0 }])
 const historyLoading = ref(false)
 const historyInited = ref(false)
 const historyHasMore = ref(false)
+
+// 稍后再看状态
+const toviewData = ref([])
+const toviewCount = ref(0)
+const toviewLoading = ref(false)
+const toviewInited = ref(false)
+const toviewPage = ref(1)
 
 // 格式化数字
 function formatCount(num) {
@@ -271,6 +278,9 @@ function switchTab(tab) {
   if (tab === 'history') {
     historyCursors.value = [{ max: 0, business: '', view_at: 0 }]
     fetchHistory(1)
+  } else if (tab === 'toview') {
+    toviewPage.value = 1
+    fetchToview()
   }
 }
 
@@ -333,6 +343,51 @@ function historyToVideo(item) {
     pubdate: item.view_at || 0,
     duration: item.duration ? formatDurationFromSec(item.duration) : '',
     cid: item.history?.cid || 0,
+  }
+}
+
+// 稍后再看分页
+const toviewPagedData = computed(() => {
+  const start = (toviewPage.value - 1) * pageSize.value
+  return toviewData.value.slice(start, start + pageSize.value)
+})
+
+const toviewTotalPages = computed(() => Math.max(1, Math.ceil(toviewCount.value / pageSize.value)))
+
+// 获取稍后再看列表
+async function fetchToview() {
+  toviewLoading.value = true
+  try {
+    const res = await authFetch('/api/bilibili/toview')
+    const data = await res.json()
+    if (data.code === 0 && data.data?.list) {
+      toviewData.value = data.data.list
+      toviewCount.value = data.data.count || data.data.list.length
+      toviewInited.value = true
+    } else if (data.code === -101) {
+      toviewData.value = []
+      toviewCount.value = 0
+    }
+  } catch (e) {
+    console.error('Fetch toview error:', e)
+  }
+  toviewLoading.value = false
+}
+
+// 将稍后再看项转为播放所需格式
+function toviewToVideo(item) {
+  return {
+    bvid: item.bvid || '',
+    aid: item.aid || 0,
+    title: item.title || '',
+    author: item.owner?.name || '',
+    pic: item.pic || '',
+    play: item.stat?.view || 0,
+    favorites: item.stat?.favorite || 0,
+    review: item.stat?.reply || 0,
+    pubdate: item.pubdate || 0,
+    duration: item.duration ? formatDurationFromSec(item.duration) : '',
+    cid: item.cid || 0,
   }
 }
 
@@ -817,6 +872,10 @@ onUnmounted(() => {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         历史记录
       </button>
+      <button v-if="bilibiliUser" class="tab-item" :class="{ active: activeTab === 'toview' }" @click="switchTab('toview')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        稍后再看
+      </button>
       <div class="tab-spacer"></div>
       <button v-if="!bilibiliUser" class="login-btn" @click="startLogin()" title="登录哔哩哔哩">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -974,6 +1033,72 @@ onUnmounted(() => {
 
       <div v-else-if="!historyLoading && historyInited && !historyPageData.length" class="empty-state">
         <div class="empty-text">暂无观看历史</div>
+      </div>
+    </div>
+
+    <!-- 稍后再看 -->
+    <div v-if="activeTab === 'toview'" class="results">
+      <div v-if="toviewLoading" class="loading">加载中...</div>
+
+      <template v-else-if="!toviewLoading && toviewPagedData.length">
+        <div class="result-list">
+          <div
+            v-for="item in toviewPagedData"
+            :key="item.aid"
+            class="video-card"
+            :class="{ active: currentBvid === item.bvid }"
+            @click="playVideo(toviewToVideo(item))"
+          >
+            <div class="video-cover-wrap">
+              <img
+                v-if="item.pic"
+                :src="proxyImg(item.pic)"
+                class="video-cover"
+                loading="lazy"
+              />
+              <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+              <div v-if="item.progress > 0 && item.duration" class="video-progress-bar">
+                <div class="video-progress-fill" :style="{ width: formatProgress(item.progress, item.duration) + '%' }"></div>
+              </div>
+            </div>
+            <div class="video-info">
+              <div class="video-title">{{ cleanTitle(item.title) }}</div>
+              <div class="video-meta">
+                <span v-if="item.owner?.name" class="video-author">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  {{ item.owner.name }}
+                </span>
+                <span v-if="item.tname" class="history-badge">{{ item.tname }}</span>
+              </div>
+              <div class="video-stats">
+                <span class="stat-item">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  {{ formatCount(item.stat?.view) }}
+                </span>
+                <span class="stat-item">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  {{ formatCount(item.stat?.reply) }}
+                </span>
+                <span class="video-date">{{ formatDate(item.add_at) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="toviewTotalPages > 1" class="pagination">
+          <button class="page-btn" :disabled="toviewPage <= 1" @click="toviewPage--">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="page-info">{{ toviewPage }} / {{ toviewTotalPages }}</span>
+          <button class="page-btn" :disabled="toviewPage >= toviewTotalPages" @click="toviewPage++">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+      </template>
+
+      <div v-else-if="!toviewLoading && toviewInited && !toviewData.length" class="empty-state">
+        <div class="empty-icon">📋</div>
+        <div class="empty-text">稍后再看列表为空</div>
       </div>
     </div>
   </div>

@@ -720,6 +720,22 @@ router.get('/history', optionalAuth, async (req, res) => {
   }
 })
 
+// 获取稍后再看列表
+router.get('/toview', optionalAuth, async (req, res) => {
+  try {
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) {
+      return res.json({ code: -101, message: '账号未登录' })
+    }
+
+    const data = await fetchUrl('https://api.bilibili.com/x/v2/history/toview', {}, { cookies: cookieStr })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili toview error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 // 上报观看进度
 router.post('/report', optionalAuth, async (req, res) => {
   try {
