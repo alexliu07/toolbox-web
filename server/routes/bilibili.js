@@ -730,4 +730,34 @@ router.post('/report', optionalAuth, async (req, res) => {
 
     const cookieStr = getCookiesString(req.user?.id)
     if (!cookieStr) {
-      return re
+      return res.json({ code: -101, message: 'not logged in' })
+    }
+
+    // 从 cookie 中提取 csrf (bili_jct)
+    const cred = getBilibiliCredentials(req.user?.id)
+    const csrf = cred?.cookies?.bili_jct || ''
+
+    const params = new URLSearchParams({
+      aid: String(aid),
+      cid: String(cid),
+      progress: String(Math.floor(progress || 0)),
+      csrf
+    })
+
+    const data = await fetchUrl('https://api.bilibili.com/x/v2/history/report', {}, {
+      method: 'POST',
+      cookies: cookieStr,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString()
+    })
+
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili report error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+export default router

@@ -61,6 +61,17 @@ const qrCode = ref('')
 const qrStatus = ref(null)  // 'loading' | 'waiting' | 'scanned' | 'expired' | null
 let qrPollTimer = null
 
+// 页面切换
+const activeTab = ref('search') // 'search' | 'history'
+
+// 历史记录状态
+const historyPage = ref(1)
+const historyPageData = ref([])
+const historyCursors = ref([{ max: 0, business: '', view_at: 0 }])
+const historyLoading = ref(false)
+const historyInited = ref(false)
+const historyHasMore = ref(false)
+
 // 格式化数字
 function formatCount(num) {
   if (!num && num !== 0) return '0'
@@ -251,6 +262,94 @@ async function goToPage(page) {
 
 function onSearchKeydown(e) {
   if (e.key === 'Enter') search()
+}
+
+// 切换页面
+function switchTab(tab) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  if (tab === 'history' && !historyInited.value) {
+    fetchHistory(1)
+  }
+}
+
+// 获取历史记录
+async function fetchHistory(page) {
+  historyLoading.value = true
+  try {
+    const cursor = historyCursors.value[page - 1] || { max: 0, business: '', view_at: 0 }
+    const params = new URLSearchParams({ ps: '20' })
+    if (cursor.max) params.set('max', cursor.max)
+    if (cursor.business) params.set('business', cursor.business)
+    if (cursor.view_at) params.set('view_at', cursor.view_at)
+
+    const res = await authFetch(`/api/bilibili/history?${params.toString()}`)
+    const data = await res.json()
+    if (data.code === 0 && data.data?.list) {
+      historyPageData.value = data.data.list
+      historyPage.value = page
+      historyInited.value = true
+
+      // 存储下一页游标
+      const nextCursor = data.data.cursor
+      if (nextCursor && data.data.list.length > 0) {
+        historyCursors.value[page] = {
+          max: nextCursor.max,
+          business: nextCursor.business,
+          view_at: nextCursor.view_at
+        }
+        historyHasMore.value = true
+      } else {
+        historyHasMore.value = false
+      }
+    } else if (data.code === -101) {
+      historyPageData.value = []
+      historyHasMore.value = false
+    }
+  } catch (e) {
+    console.error('Fetch history error:', e)
+  }
+  historyLoading.value = false
+}
+
+function historyGoToPage(page) {
+  if (page < 1) return
+  if (page > historyPage.value && !historyHasMore.value) return
+  fetchHistory(page)
+}
+
+// 将历史记录项转为播放所需格式
+function historyToVideo(item) {
+  return {
+    bvid: item.history?.bvid || '',
+    aid: item.history?.oid || 0,
+    title: item.title || '',
+    author: item.author_name || '',
+    pic: item.cover || '',
+    play: 0,
+    favorites: 0,
+    review: 0,
+    pubdate: item.view_at || 0,
+    duration: item.duration ? formatDurationFromSec(item.duration) : '',
+    cid: item.history?.cid || 0,
+  }
+}
+
+// 格式化秒数为 HH:MM:SS 或 MM:SS
+function formatDurationFromSec(sec) {
+  if (!sec) return '--:--'
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+// 格式化观看进度百分比
+function formatProgress(progress, duration) {
+  if (!duration || duration <= 0) return 0
+  if (progress < 0) return 100 // 已看完
+  return Math.min(100, Math.round((progress / duration) * 100))
 }
 
 // 点击播放视频
@@ -703,8 +802,28 @@ onUnmounted(() => {
       </div>
     </transition>
 
+    <!-- 页面切换标签 -->
+    <div class="tab-bar">
+      <button class="tab-item" :class="{ active: activeTab === 'search' }" @click="switchTab('search')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        搜索
+      </button>
+      <button class="tab-item" :class="{ active: activeTab === 'history' }" @click="switchTab('history')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        历史记录
+      </button>
+      <div class="tab-spacer"></div>
+      <button v-if="!bilibiliUser" class="login-btn" @click="startLogin()" title="登录哔哩哔哩">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
+      <div v-else class="user-info" @click="logout()" title="点击登出">
+        <img v-if="bilibiliUser.avatar_url" :src="proxyAvatar(bilibiliUser.avatar_url)" class="user-avatar" />
+        <span class="user-name">{{ bilibiliUser.nickname }}</span>
+      </div>
+    </div>
+
     <!-- 搜索栏 -->
-    <div class="search-bar">
+    <div v-if="activeTab === 'search'" class="search-bar">
       <input
         v-model="query"
         type="text"
@@ -716,17 +835,10 @@ onUnmounted(() => {
       <button class="search-btn" @click="search()" :disabled="loading">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
-      <button v-if="!bilibiliUser" class="login-btn" @click="startLogin()" title="登录哔哩哔哩">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      </button>
-      <div v-else class="user-info" @click="logout()" title="点击登出">
-        <img v-if="bilibiliUser.avatar_url" :src="proxyAvatar(bilibiliUser.avatar_url)" class="user-avatar" />
-        <span class="user-name">{{ bilibiliUser.nickname }}</span>
-      </div>
     </div>
 
     <!-- 搜索结果 -->
-    <div ref="resultsRef" class="results">
+    <div v-if="activeTab === 'search'" ref="resultsRef" class="results">
       <div v-if="loading" class="loading">搜索中...</div>
 
       <template v-if="!loading && pagedResults.length">
@@ -792,6 +904,71 @@ onUnmounted(() => {
       <div v-if="!loading && !searched" class="empty-state">
         <div class="empty-icon">📺</div>
         <div class="empty-text">搜索视频开始播放</div>
+      </div>
+    </div>
+
+    <!-- 历史记录 -->
+    <div v-if="activeTab === 'history'" class="results">
+      <div v-if="!bilibiliUser" class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <div class="empty-text">请先登录查看历史记录</div>
+        <button class="login-prompt-btn" @click="startLogin()">登录</button>
+      </div>
+
+      <div v-else-if="historyLoading" class="loading">加载中...</div>
+
+      <template v-else-if="!historyLoading && historyPageData.length">
+        <div class="result-list">
+          <div
+            v-for="item in historyPageData"
+            :key="item.kid"
+            class="video-card"
+            :class="{ active: currentBvid === (item.history?.bvid || '') }"
+            @click="playVideo(historyToVideo(item))"
+          >
+            <div class="video-cover-wrap">
+              <img
+                v-if="item.cover"
+                :src="proxyImg(item.cover)"
+                class="video-cover"
+                loading="lazy"
+              />
+              <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+              <div v-if="item.progress != null && item.duration" class="video-progress-bar">
+                <div class="video-progress-fill" :style="{ width: formatProgress(item.progress, item.duration) + '%' }"></div>
+              </div>
+            </div>
+            <div class="video-info">
+              <div class="video-title">{{ cleanTitle(item.title) }}</div>
+              <div v-if="item.long_title || item.show_title" class="video-subtitle">{{ item.long_title || item.show_title }}</div>
+              <div class="video-meta">
+                <span v-if="item.author_name" class="video-author">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  {{ item.author_name }}
+                </span>
+                <span v-if="item.badge" class="history-badge">{{ item.badge }}</span>
+              </div>
+              <div class="video-stats">
+                <span class="video-date">{{ formatDate(item.view_at) }}</span>
+                <span v-if="item.tag_name" class="stat-item">{{ item.tag_name }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pagination">
+          <button class="page-btn" :disabled="historyPage <= 1 || historyLoading" @click="historyGoToPage(historyPage - 1)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="page-info">{{ historyPage }}</span>
+          <button class="page-btn" :disabled="!historyHasMore || historyLoading" @click="historyGoToPage(historyPage + 1)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+      </template>
+
+      <div v-else-if="!historyLoading && historyInited && !historyPageData.length" class="empty-state">
+        <div class="empty-text">暂无观看历史</div>
       </div>
     </div>
   </div>
@@ -1497,6 +1674,95 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 标签栏 */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.tab-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tab-item.active {
+  background: rgba(0, 161, 214, 0.2);
+  border-color: rgba(0, 161, 214, 0.4);
+  color: #00a1d6;
+}
+
+.tab-spacer {
+  flex: 1;
+}
+
+/* 历史记录副标题 */
+.video-subtitle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 历史记录角标 */
+.history-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(0, 161, 214, 0.2);
+  color: #00a1d6;
+  border-radius: 4px;
+}
+
+/* 观看进度条 */
+.video-progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.video-progress-fill {
+  height: 100%;
+  background: #00a1d6;
+  border-radius: 0 2px 2px 0;
+  transition: width 0.2s;
+}
+
+/* 登录提示按钮 */
+.login-prompt-btn {
+  padding: 8px 24px;
+  background: rgba(0, 161, 214, 0.5);
+  border: 1px solid rgba(0, 161, 214, 0.4);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.login-prompt-btn:hover {
+  background: rgba(0, 161, 214, 0.7);
 }
 
 :deep(.quantity) {
