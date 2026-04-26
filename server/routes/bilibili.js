@@ -329,7 +329,6 @@ router.get('/search', optionalAuth, async (req, res) => {
       duration: 0,
       tids: 0
     })
-    console.log(`search userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
@@ -346,7 +345,6 @@ router.get('/pagelist', optionalAuth, async (req, res) => {
     if (!bvid) {
       return res.status(400).json({ code: -400, message: 'bvid is required' })
     }
-    console.log(`pagelist userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid }, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
@@ -372,7 +370,6 @@ router.get('/mpd', optionalAuth, async (req, res) => {
       fourk: 1,
       fnver: 0,
     })
-    console.log(`mpd userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
 
@@ -387,20 +384,32 @@ router.get('/mpd', optionalAuth, async (req, res) => {
 
     const duration = dash.duration || 0
 
+    // 构建清晰度 id → 描述 的映射
+    const qualityMap = {}
+    const acceptQuality = data.data?.accept_quality || []
+    const acceptDescription = data.data?.accept_description || []
+    for (let i = 0; i < acceptQuality.length; i++) {
+      qualityMap[acceptQuality[i]] = acceptDescription[i] || ''
+    }
+
     // 构建代理 URL（绝对路径，dash.js 会直接请求这些 URL）
     const streamBase = '/api/bilibili/stream'
 
     // 视频 AdaptationSet — 包含所有清晰度的 Representation
     let videoRepresentations = ''
+    let cnt = 0;
     for (let i = 0; i < dash.video.length; i++) {
       const v = dash.video[i]
+      if(v.codecid !== 7)continue;
       const proxyVideoUrl = `${streamBase}?url=${encodeURIComponent(v.baseUrl)}`
       const codecs = v.codecs || 'avc1.640032'
       const bandwidth = v.bandwidth || 1000000
       const width = v.width || 1920
       const height = v.height || 1080
+      const fps = `${parseFloat(v.frameRate) * 1000}/1000`
+      const label = qualityMap[v.id] || `${height}P`
       videoRepresentations += `
-        <Representation id="${i+1}" bandwidth="${bandwidth}" codecs="${codecs}" width="${width}" height="${height}">
+        <Representation id="${cnt++}" bandwidth="${bandwidth}" codecs="${codecs}" width="${width}" height="${height}" frameRate="${fps}" label="${label}">
           <BaseURL>${escapeXml(proxyVideoUrl)}</BaseURL>
         </Representation>`
     }
@@ -419,7 +428,7 @@ router.get('/mpd', optionalAuth, async (req, res) => {
         const codecs = a.codecs || 'mp4a.40.2'
         const bandwidth = a.bandwidth || 128000
         audioRepresentations += `
-        <Representation id="${i+1}" bandwidth="${bandwidth}" codecs="${codecs}">
+        <Representation id="${i}" bandwidth="${bandwidth}" codecs="${codecs}">
           <BaseURL>${escapeXml(proxyAudioUrl)}</BaseURL>
         </Representation>`
       }

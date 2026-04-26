@@ -1,12 +1,11 @@
 <script setup>
 import { ref, computed, nextTick, inject, onMounted, onUnmounted, shallowRef, markRaw } from 'vue'
-import NPlayer from 'nplayer'
+import NPlayer, { Popover } from 'nplayer'
 import Danmaku from '@nplayer/danmaku'
 import { MediaPlayer } from 'dashjs'
 
 const authFetch = inject('authFetch')
 
-const BILIBILI_API_PAGE_SIZE = 20
 // 卡片高度(90封面+20padding+2border) + gap
 const CARD_HEIGHT = 112
 const CARD_GAP = 8
@@ -39,7 +38,6 @@ const totalPages = computed(() => Math.max(1, Math.ceil(searchTotal.value / page
 const currentVideo = ref(null)
 const currentBvid = ref('')
 const currentCid = ref('')
-const videoInfo = ref(null)
 const streamUrl = ref('')
 const danmakuOid = ref('')
 const pageList = ref([])
@@ -327,12 +325,36 @@ async function initNPlayer() {
 
     const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true })
 
+    const Quantity = {
+      el: document.createElement('div'),
+      init() {
+        this.btn = document.createElement('div')
+        this.btn.textContent = '画质'
+        this.el.appendChild(this.btn)
+        this.popover = new Popover(this.el)
+        this.btn.addEventListener('click', () => this.popover.show())
+        this.el.style.display = 'none'
+        this.el.classList.add('quantity')
+      }
+    }
     // 创建 NPlayer
-    const player = new NPlayer({plugins: [danmaku] })
-
-    // 使用 dash.js 加载后端生成的 MPD 清单
-    dashPlayerInstance = MediaPlayer().create()
-    dashPlayerInstance.initialize(player.video, streamUrl.value, true)
+    const player = new NPlayer({
+      controls:[
+        [
+          "play",
+          "volume",
+          "time",
+          "spacer",
+          Quantity,
+          "airplay",
+          "settings",
+          "web-fullscreen",
+          "fullscreen"
+        ],
+        ["progress"]
+      ],
+      plugins:[danmaku]
+    })
 
     dp.value = markRaw(player)
 
@@ -340,6 +362,82 @@ async function initNPlayer() {
     dp.value.on('pause', () => { isPlaying.value = false })
     dp.value.on('ended', () => { isPlaying.value = false })
 
+    // 使用 dash.js 加载后端生成的 MPD 清单
+    const dashPlayerInstance = MediaPlayer().create()
+    dashPlayerInstance.initialize(dp.value.video, streamUrl.value, true)
+    let repLabelMap = new Map();
+    dashPlayerInstance.on(MediaPlayer.events.MANIFEST_LOADED,(e=>{
+      const adaptations = e.data.Period[0].AdaptationSet;
+      const videoAdapt = adaptations.find(a =>
+          a.contentType === 'video' || a.mimeType?.startsWith('video')
+      );
+      videoAdapt?.Representation?.forEach(rep => {
+        repLabelMap.set(String(rep.id), rep.Label?.[0].__text ?? '');
+      });
+    }))
+
+    dashPlayerInstance.on(MediaPlayer.events.STREAM_INITIALIZED,()=>{
+      // 获取所有清晰度，按分辨率从高到低排序
+      dashPlayerInstance.getTracksFor()
+      const levels = dashPlayerInstance.getRepresentationsByType('video')
+      levels.sort((a, b) => b.height - a.height)
+      const frag = document.createDocumentFragment()
+      // 5. 切换清晰度的逻辑
+      const listener = (index) => (init) => {
+        // 更新高亮样式
+        const prevEl = Quantity.itemElements[Quantity.value]
+        const curEl = Quantity.itemElements[index]
+        if (prevEl) prevEl.classList.remove('quantity_item-active')
+        if (curEl) curEl.classList.add('quantity_item-active')
+
+        Quantity.btn.textContent = index === -1 ? '自动' : (levels[index].label || curEl.textContent)
+        Quantity.value = index
+        Quantity.popover.hide()
+        if (index === -1) {
+          // 自动模式：开启 ABR 自适应
+          dashPlayerInstance.updateSettings({
+            streaming: {abr: {autoSwitchBitrate: {video: true, audio: true}}}
+          })
+        } else {
+          // 手动模式：关闭 ABR，指定清晰度
+          dashPlayerInstance.updateSettings({
+            streaming: {abr: {autoSwitchBitrate: {video: false,audio: true}}}
+          })
+          // dash.js 的 index 对应排序后的原始 qualityIndex
+          dashPlayerInstance.setRepresentationForTypeById('video', levels[index].id)
+        }
+      }
+      // 6. 生成清晰度菜单项
+      Quantity.itemElements = levels.map((l, i) => {
+        const el = document.createElement('div')
+        el.textContent = repLabelMap.get(String(i)) || l.height + 'P'
+        el.classList.add('quantity_item')
+        el.addEventListener('click', () => listener(i)())
+        frag.appendChild(el)
+        return el
+      })
+      dashPlayerInstance.on(MediaPlayer.events.QUALITY_CHANGE_REQUESTED, (e) => {
+        console.log('切换请求:', e);
+      });
+
+      dashPlayerInstance.on(MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
+        console.log('切换生效:', e); // 实际渲染的新清晰度
+      });
+
+      // 7. 添加「自动」选项
+      const autoEl = document.createElement('div')
+      autoEl.textContent = '自动'
+      autoEl.classList.add('quantity_item')
+      autoEl.addEventListener('click', () => listener(-1)())
+      frag.appendChild(autoEl)
+      Quantity.itemElements.push(autoEl)
+
+      Quantity.popover.panelEl.appendChild(frag)
+      Quantity.el.style.display = 'block'
+
+      // 初始化为自动模式
+      listener(-1)(true)
+    })
     dp.value.mount(playerContainerRef.value)
 
 
@@ -1338,5 +1436,28 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:deep(.quantity) {
+  position: relative;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+:deep(.quantity:hover) {
+  opacity: 1;
+}
+:deep(.quantity_item) {
+  padding: 5px 20px;
+  font-weight: normal;
+}
+:deep(.quantity_item:hover) {
+  background: rgba(255, 255, 255, 0.3);
+}
+:deep(.quantity_item-active) {
+  color: var(--theme-color);
 }
 </style>
