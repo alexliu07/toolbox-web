@@ -52,6 +52,7 @@ const showPlayer = ref(false)
 
 const loadingStream = ref(false)
 const episodeCollapsed = ref(false)
+const pendingSeekTime = ref(null) // 自动跳转到上次播放进度（秒）
 
 // 登录状态
 const bilibiliUser = ref(null)
@@ -277,6 +278,21 @@ async function playVideo(video) {
     currentPageIndex.value = 0
     currentCid.value = cidData.data[0].cid
     danmakuOid.value = cidData.data[0].cid
+    pendingSeekTime.value = null
+
+    // 获取上次播放进度并自动跳转
+    try {
+      const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(video.bvid)}&cid=${currentCid.value}`)
+      const lpData = await lpRes.json()
+      if (lpData.code === 0 && lpData.data) {
+        const { last_play_time } = lpData.data
+        if (last_play_time) {
+          pendingSeekTime.value = last_play_time / 1000 // 毫秒转秒
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch last play info:', e)
+    }
 
     // 获取视频流地址
     await fetchStreamUrl()
@@ -372,7 +388,8 @@ async function initNPlayer() {
           a.contentType === 'video' || a.mimeType?.startsWith('video')
       );
       videoAdapt?.Representation?.forEach(rep => {
-        repLabelMap.set(String(rep.id), rep.Label?.[0].__text ?? '');
+        const label = rep.Label?.[0].__text || rep.label
+        repLabelMap.set(String(rep.id), label);
       });
     }))
 
@@ -437,6 +454,17 @@ async function initNPlayer() {
 
       // 初始化为自动模式
       listener(-1)(true)
+
+      // 自动跳转到上次播放进度
+      if (pendingSeekTime.value != null) {
+        const seekTo = pendingSeekTime.value
+        pendingSeekTime.value = null
+        setTimeout(() => {
+          if (dp.value && dp.value.video) {
+            dp.value.video.currentTime = seekTo
+          }
+        }, 300)
+      }
     })
     dp.value.mount(playerContainerRef.value)
 
@@ -485,6 +513,22 @@ async function fetchStreamUrl() {
 }
 
 function closePlayer() {
+  // 上报观看进度
+  try {
+    const video = dp.value?.video
+    const aid = currentVideo.value?.aid
+    if (video && aid && currentCid.value) {
+      const progress = Math.floor(video.currentTime)
+      authFetch('/api/bilibili/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aid, cid: parseInt(currentCid.value), progress })
+      }).catch(e => console.warn('Report progress failed:', e))
+    }
+  } catch (e) {
+    console.warn('Report progress error:', e)
+  }
+
   showPlayer.value = false
   if (dashPlayerInstance) {
     dashPlayerInstance.reset()
@@ -506,6 +550,7 @@ function closePlayer() {
   danmakuOid.value = ''
   pageList.value = []
   currentPageIndex.value = 0
+  pendingSeekTime.value = null
 }
 
 async function switchEpisode(index) {
@@ -515,6 +560,7 @@ async function switchEpisode(index) {
   currentPageIndex.value = index
   currentCid.value = page.cid
   danmakuOid.value = page.cid
+  pendingSeekTime.value = null
   loadingStream.value = true
   isPlaying.value = false
   if (dashPlayerInstance) {
@@ -525,6 +571,21 @@ async function switchEpisode(index) {
     dp.value.dispose()
     dp.value = null
   }
+
+  // 获取该分集的播放进度
+  try {
+    const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(currentBvid.value)}&cid=${page.cid}`)
+    const lpData = await lpRes.json()
+    if (lpData.code === 0 && lpData.data) {
+      const { last_play_time } = lpData.data
+      if (last_play_time) {
+        pendingSeekTime.value = last_play_time / 1000
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to fetch last play info:', e)
+  }
+
   await fetchStreamUrl()
 }
 

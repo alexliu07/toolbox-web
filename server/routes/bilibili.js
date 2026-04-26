@@ -175,6 +175,9 @@ function fetchUrl(targetUrl, params, options = {}) {
       req.destroy()
       reject(new Error('Request timeout'))
     })
+    if (options.body) {
+      req.write(options.body)
+    }
     req.end()
   })
 }
@@ -657,21 +660,74 @@ router.get('/danmaku/', async (req, res) => {
   }
 })
 
-// 获取视频信息
-router.get('/videoinfo', optionalAuth, async (req, res) => {
+// 获取上次播放进度（last_play_time + last_play_cid）
+router.get('/lastplay', optionalAuth, async (req, res) => {
   try {
-    const { bvid } = req.query
-    if (!bvid) {
-      return res.status(400).json({ code: -400, message: 'bvid is required' })
+    const { bvid, cid } = req.query
+    if (!bvid || !cid) {
+      return res.status(400).json({ code: -400, message: 'bvid and cid are required' })
     }
 
+    await fetchWbiKeys()
     const cookieStr = getCookiesString(req.user?.id)
-    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/view', { bvid }, cookieStr ? { cookies: cookieStr } : {})
-    res.json(data)
+    const cookieOpt = cookieStr ? { cookies: cookieStr } : {}
+
+    const params = signWBI({
+      bvid,
+      cid: parseInt(cid),
+      fnval: 16,
+      fnver: 0,
+    })
+    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieOpt)
+    if (data.code !== 0) {
+      return res.json({ code: data.code, message: data.message || 'playurl error' })
+    }
+
+    res.json({
+      code: 0,
+      data: {
+        last_play_time: data.data?.last_play_time ?? null,
+        last_play_cid: data.data?.last_play_cid ?? null,
+      }
+    })
   } catch (e) {
-    console.error('Bilibili videoinfo error:', e.message)
+    console.error('Bilibili lastplay error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
   }
 })
 
-export default router
+// 获取历史记录列表（游标分页）
+router.get('/history', optionalAuth, async (req, res) => {
+  try {
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) {
+      return res.json({ code: -101, message: '账号未登录' })
+    }
+
+    const { max, business, view_at, type, ps } = req.query
+    const params = {}
+    if (max) params.max = max
+    if (business) params.business = business
+    if (view_at) params.view_at = view_at
+    if (type) params.type = type
+    params.ps = ps || 20
+
+    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/history/cursor', params, { cookies: cookieStr })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili history error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 上报观看进度
+router.post('/report', optionalAuth, async (req, res) => {
+  try {
+    const { aid, cid, progress } = req.body
+    if (!aid || !cid) {
+      return res.status(400).json({ code: -400, message: 'aid and cid are required' })
+    }
+
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) {
+      return re
