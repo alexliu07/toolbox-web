@@ -9,7 +9,7 @@ const authFetch = inject('authFetch')
 // 卡片高度(90封面+20padding+2border) + gap
 const CARD_HEIGHT = 112
 const CARD_GAP = 8
-const PAGINATION_HEIGHT = 56
+const PAGINATION_HEIGHT = 40
 
 // 结果区域高度 → 动态 pageSize
 const resultsRef = ref(null)
@@ -268,7 +268,8 @@ function onSearchKeydown(e) {
 function switchTab(tab) {
   if (activeTab.value === tab) return
   activeTab.value = tab
-  if (tab === 'history' && !historyInited.value) {
+  if (tab === 'history') {
+    historyCursors.value = [{ max: 0, business: '', view_at: 0 }]
     fetchHistory(1)
   }
 }
