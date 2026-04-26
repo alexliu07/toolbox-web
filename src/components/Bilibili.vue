@@ -380,18 +380,20 @@ async function playVideo(video) {
     danmakuOid.value = cidData.data[0].cid
     pendingSeekTime.value = null
 
-    // 获取上次播放进度并自动跳转
-    try {
-      const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(video.bvid)}&cid=${currentCid.value}`)
-      const lpData = await lpRes.json()
-      if (lpData.code === 0 && lpData.data) {
-        const { last_play_time } = lpData.data
-        if (last_play_time) {
-          pendingSeekTime.value = last_play_time / 1000 // 毫秒转秒
+    // 获取上次播放进度并自动跳转（仅登录用户）
+    if (bilibiliUser.value) {
+      try {
+        const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(video.bvid)}&cid=${currentCid.value}`)
+        const lpData = await lpRes.json()
+        if (lpData.code === 0 && lpData.data) {
+          const { last_play_time } = lpData.data
+          if (last_play_time) {
+            pendingSeekTime.value = last_play_time / 1000 // 毫秒转秒
+          }
         }
+      } catch (e) {
+        console.warn('Failed to fetch last play info:', e)
       }
-    } catch (e) {
-      console.warn('Failed to fetch last play info:', e)
     }
 
     // 获取视频流地址
@@ -672,18 +674,20 @@ async function switchEpisode(index) {
     dp.value = null
   }
 
-  // 获取该分集的播放进度
-  try {
-    const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(currentBvid.value)}&cid=${page.cid}`)
-    const lpData = await lpRes.json()
-    if (lpData.code === 0 && lpData.data) {
-      const { last_play_time } = lpData.data
-      if (last_play_time) {
-        pendingSeekTime.value = last_play_time / 1000
+  // 获取该分集的播放进度（仅登录用户）
+  if (bilibiliUser.value) {
+    try {
+      const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(currentBvid.value)}&cid=${page.cid}`)
+      const lpData = await lpRes.json()
+      if (lpData.code === 0 && lpData.data) {
+        const { last_play_time } = lpData.data
+        if (last_play_time) {
+          pendingSeekTime.value = last_play_time / 1000
+        }
       }
+    } catch (e) {
+      console.warn('Failed to fetch last play info:', e)
     }
-  } catch (e) {
-    console.warn('Failed to fetch last play info:', e)
   }
 
   await fetchStreamUrl()
@@ -809,7 +813,7 @@ onUnmounted(() => {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         搜索
       </button>
-      <button class="tab-item" :class="{ active: activeTab === 'history' }" @click="switchTab('history')">
+      <button v-if="bilibiliUser" class="tab-item" :class="{ active: activeTab === 'history' }" @click="switchTab('history')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         历史记录
       </button>
