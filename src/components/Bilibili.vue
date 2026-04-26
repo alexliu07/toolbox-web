@@ -64,13 +64,21 @@ let qrPollTimer = null
 // 页面切换
 const activeTab = ref('search') // 'search' | 'history' | 'toview'
 
-// 历史记录状态
-const historyPage = ref(1)
-const historyPageData = ref([])
+// 历史记录状态（累积式分页，与搜索一致）
+const allHistoryResults = ref([])
+const historyTotal = ref(0)
+const historyLocalPage = ref(1)
+const historyApiPage = ref(0)  // 已加载到第几 API 页（游标页）
 const historyCursors = ref([{ max: 0, business: '', view_at: 0 }])
 const historyLoading = ref(false)
 const historyInited = ref(false)
-const historyHasMore = ref(false)
+
+const historyPagedData = computed(() => {
+  const start = (historyLocalPage.value - 1) * pageSize.value
+  return allHistoryResults.value.slice(start, start + pageSize.value)
+})
+
+const historyTotalPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / pageSize.value)))
 
 // 稍后再看状态
 const toviewData = ref([])
@@ -276,19 +284,23 @@ function switchTab(tab) {
   if (activeTab.value === tab) return
   activeTab.value = tab
   if (tab === 'history') {
+    allHistoryResults.value = []
+    historyTotal.value = 0
+    historyLocalPage.value = 1
+    historyApiPage.value = 0
     historyCursors.value = [{ max: 0, business: '', view_at: 0 }]
-    fetchHistory(1)
+    fetchHistory()
   } else if (tab === 'toview') {
     toviewPage.value = 1
     fetchToview()
   }
 }
 
-// 获取历史记录
-async function fetchHistory(page) {
+// 获取历史记录（累积式，与搜索 fetchApiPage 一致）
+async function fetchHistory() {
   historyLoading.value = true
   try {
-    const cursor = historyCursors.value[page - 1] || { max: 0, business: '', view_at: 0 }
+    const cursor = historyCursors.value[historyApiPage.value] || { max: 0, business: '', view_at: 0 }
     const params = new URLSearchParams({ ps: '20' })
     if (cursor.max) params.set('max', cursor.max)
     if (cursor.business) params.set('business', cursor.business)
@@ -297,25 +309,22 @@ async function fetchHistory(page) {
     const res = await authFetch(`/api/bilibili/history?${params.toString()}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
-      historyPageData.value = data.data.list
-      historyPage.value = page
+      allHistoryResults.value = [...allHistoryResults.value, ...data.data.list]
+      historyTotal.value = allHistoryResults.value.length
+      historyApiPage.value++
       historyInited.value = true
 
       // 存储下一页游标
       const nextCursor = data.data.cursor
       if (nextCursor && data.data.list.length > 0) {
-        historyCursors.value[page] = {
+        historyCursors.value[historyApiPage.value] = {
           max: nextCursor.max,
           business: nextCursor.business,
           view_at: nextCursor.view_at
         }
-        historyHasMore.value = true
-      } else {
-        historyHasMore.value = false
       }
     } else if (data.code === -101) {
-      historyPageData.value = []
-      historyHasMore.value = false
+      historyInited.value = true
     }
   } catch (e) {
     console.error('Fetch history error:', e)
@@ -323,10 +332,17 @@ async function fetchHistory(page) {
   historyLoading.value = false
 }
 
-function historyGoToPage(page) {
-  if (page < 1) return
-  if (page > historyPage.value && !historyHasMore.value) return
-  fetchHistory(page)
+async function historyGoToPage(page) {
+  if (page < 1 || page > historyTotalPages.value) return
+  // 检查是否需要加载更多 API 数据
+  const needed = page * pageSize.value
+  while (allHistoryResults.value.length < needed && (historyCursors.value[historyApiPage.value] || historyApiPage.value === 0)) {
+    const prevLen = allHistoryResults.value.length
+    await fetchHistory()
+    // 如果没有新数据了，停止加载
+    if (allHistoryResults.value.length === prevLen) break
+  }
+  historyLocalPage.value = page
 }
 
 // 将历史记录项转为播放所需格式
@@ -983,10 +999,10 @@ onUnmounted(() => {
 
       <div v-else-if="historyLoading" class="loading">加载中...</div>
 
-      <template v-else-if="!historyLoading && historyPageData.length">
+      <template v-else-if="!historyLoading && historyPagedData.length">
         <div class="result-list">
           <div
-            v-for="item in historyPageData"
+            v-for="item in historyPagedData"
             :key="item.kid"
             class="video-card"
             :class="{ active: currentBvid === (item.history?.bvid || '') }"
@@ -1022,18 +1038,18 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="pagination">
-          <button class="page-btn" :disabled="historyPage <= 1 || historyLoading" @click="historyGoToPage(historyPage - 1)">
+        <div v-if="historyTotalPages > 1" class="pagination">
+          <button class="page-btn" :disabled="historyLocalPage <= 1 || historyLoading" @click="historyGoToPage(historyLocalPage - 1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <span class="page-info">{{ historyPage }}</span>
-          <button class="page-btn" :disabled="!historyHasMore || historyLoading" @click="historyGoToPage(historyPage + 1)">
+          <span class="page-info">{{ historyLocalPage }} / {{ historyTotalPages }}</span>
+          <button class="page-btn" :disabled="historyLocalPage >= historyTotalPages || historyLoading" @click="historyGoToPage(historyLocalPage + 1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
       </template>
 
-      <div v-else-if="!historyLoading && historyInited && !historyPageData.length" class="empty-state">
+      <div v-else-if="!historyLoading && historyInited && !allHistoryResults.length" class="empty-state">
         <div class="empty-text">暂无观看历史</div>
       </div>
     </div>
