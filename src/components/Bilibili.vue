@@ -365,7 +365,11 @@ async function fetchStreamUrl() {
   if (!currentBvid.value || !currentCid.value) return
   try {
     // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
-    streamUrl.value = `/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`
+    const response = await authFetch(`/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`)
+    const mpdText = await response.text();
+    const modified = mpdText.replaceAll('/api', `${window.location.origin}/api`);
+    const blob = new Blob([modified], { type: 'application/dash+xml' });
+    streamUrl.value = URL.createObjectURL(blob)
 
     // 等待 DOM 更新后初始化 NPlayer
     nextTick(() => {

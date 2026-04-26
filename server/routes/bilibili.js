@@ -122,7 +122,7 @@ function fetchUrl(targetUrl, params, options = {}) {
       path: path,
       method: options.method || 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
         'Referer': 'https://www.bilibili.com',
         'Origin': 'https://www.bilibili.com',
         ...(options.cookies ? { 'Cookie': options.cookies } : {}),
@@ -130,7 +130,6 @@ function fetchUrl(targetUrl, params, options = {}) {
       },
       timeout: 15000
     }
-
     const req = httpModule.request(options2, (res) => {
       const chunks = []
       res.on('data', chunk => chunks.push(chunk))
@@ -218,9 +217,22 @@ router.get('/login/qr/poll', requireAuth, async (req, res) => {
         const match = sc.match(/^([^=]+)=([^;]*)/)
         if (match) cookies[match[1]] = match[2]
       }
-      // 获取用户信息
+      // 请求 www.bilibili.com 获取更多 cookie
       const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ')
-      const navData = await fetchUrl('https://api.bilibili.com/x/web-interface/nav', {}, { cookies: cookieStr })
+      try {
+        const homepageResp = await fetchUrl('https://www.bilibili.com/', {}, { rawResponse: true, headers: { Cookie: cookieStr } })
+        const extraCookies = homepageResp.headers['set-cookie'] || []
+        for (const sc of extraCookies) {
+          const match = sc.match(/^([^=]+)=([^;]*)/)
+          if (match) cookies[match[1]] = match[2]
+        }
+      } catch (e) {
+        console.warn('[bilibili] failed to fetch homepage cookies:', e.message)
+      }
+
+      // 获取用户信息
+      const cookieStr2 = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+      const navData = await fetchUrl('https://api.bilibili.com/x/web-interface/nav', {}, { cookies: cookieStr2 })
       const profile = navData?.data || {}
       saveBilibiliCredentials(req.user.id, {
         cookies,
@@ -317,7 +329,7 @@ router.get('/search', optionalAuth, async (req, res) => {
       duration: 0,
       tids: 0
     })
-
+    console.log(`search userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
@@ -334,7 +346,7 @@ router.get('/pagelist', optionalAuth, async (req, res) => {
     if (!bvid) {
       return res.status(400).json({ code: -400, message: 'bvid is required' })
     }
-
+    console.log(`pagelist userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid }, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
@@ -356,11 +368,11 @@ router.get('/mpd', optionalAuth, async (req, res) => {
     const params = signWBI({
       bvid: bvid,
       cid: parseInt(cid),
-      qn: 64,
       fnval: 4048,
-      fourk: 1
+      fourk: 1,
+      fnver: 0,
     })
-
+    console.log(`mpd userid:${req.user?.id}`)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
 
@@ -374,35 +386,46 @@ router.get('/mpd', optionalAuth, async (req, res) => {
     }
 
     const duration = dash.duration || 0
-    const videoAdapt = dash.video[0]
-    const audioAdapt = dash.audio?.[0] || null
 
     // 构建代理 URL（绝对路径，dash.js 会直接请求这些 URL）
     const streamBase = '/api/bilibili/stream'
-    const proxyVideoUrl = `${streamBase}?url=${encodeURIComponent(videoAdapt.baseUrl)}`
-    const proxyAudioUrl = audioAdapt ? `${streamBase}?url=${encodeURIComponent(audioAdapt.baseUrl)}` : ''
 
-    // 构建 MPD — 使用 SegmentBase + indexRange，代理自动处理 416 重试
-    const codecsVideo = videoAdapt.codecs || 'avc1.640032'
-    const bandwidthVideo = videoAdapt.bandwidth || 1000000
-    const widthVideo = videoAdapt.width || 1920
-    const heightVideo = videoAdapt.height || 1080
+    // 视频 AdaptationSet — 包含所有清晰度的 Representation
+    let videoRepresentations = ''
+    for (let i = 0; i < dash.video.length; i++) {
+      const v = dash.video[i]
+      const proxyVideoUrl = `${streamBase}?url=${encodeURIComponent(v.baseUrl)}`
+      const codecs = v.codecs || 'avc1.640032'
+      const bandwidth = v.bandwidth || 1000000
+      const width = v.width || 1920
+      const height = v.height || 1080
+      videoRepresentations += `
+        <Representation id="${i+1}" bandwidth="${bandwidth}" codecs="${codecs}" width="${width}" height="${height}">
+          <BaseURL>${escapeXml(proxyVideoUrl)}</BaseURL>
+        </Representation>`
+    }
 
     let adaptationSets = `
-    <AdaptationSet mimeType="video/mp4" codecs="${codecsVideo}" width="${widthVideo}" height="${heightVideo}" bandwidth="${bandwidthVideo}">
-      <Representation id="1" bandwidth="${bandwidthVideo}" codecs="${codecsVideo}" width="${widthVideo}" height="${heightVideo}">
-        <BaseURL>${escapeXml(proxyVideoUrl)}</BaseURL>
-      </Representation>
+    <AdaptationSet mimeType="video/mp4">
+      ${videoRepresentations}
     </AdaptationSet>`
 
-    if (audioAdapt && proxyAudioUrl) {
-      const codecsAudio = audioAdapt.codecs || 'mp4a.40.2'
-      const bandwidthAudio = audioAdapt.bandwidth || 128000
+    // 音频 AdaptationSet — 包含所有音质的 Representation
+    if (dash.audio?.length) {
+      let audioRepresentations = ''
+      for (let i = 0; i < dash.audio.length; i++) {
+        const a = dash.audio[i]
+        const proxyAudioUrl = `${streamBase}?url=${encodeURIComponent(a.baseUrl)}`
+        const codecs = a.codecs || 'mp4a.40.2'
+        const bandwidth = a.bandwidth || 128000
+        audioRepresentations += `
+        <Representation id="${i+1}" bandwidth="${bandwidth}" codecs="${codecs}">
+          <BaseURL>${escapeXml(proxyAudioUrl)}</BaseURL>
+        </Representation>`
+      }
       adaptationSets += `
-    <AdaptationSet mimeType="audio/mp4" codecs="${codecsAudio}" bandwidth="${bandwidthAudio}">
-      <Representation id="2" bandwidth="${bandwidthAudio}" codecs="${codecsAudio}">
-        <BaseURL>${escapeXml(proxyAudioUrl)}</BaseURL>
-      </Representation>
+    <AdaptationSet mimeType="audio/mp4">
+      ${audioRepresentations}
     </AdaptationSet>`
     }
 
