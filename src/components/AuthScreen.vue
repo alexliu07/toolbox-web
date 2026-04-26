@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { useAuth } from '../composables/useAuth.js'
 
-const { authChecked, isLoggedIn, submitAuth } = useAuth()
+const { authChecked, isLoggedIn, submitAuth, authFetch } = useAuth()
 
 const authMode = ref('login')
 const authUsername = ref('')
