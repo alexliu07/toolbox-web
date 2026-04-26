@@ -901,8 +901,10 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <!-- 内容区域（统一容器，ResizeObserver 监听此元素） -->
+    <div ref="resultsRef" class="results-wrapper">
     <!-- 搜索结果 -->
-    <div v-if="activeTab === 'search'" ref="resultsRef" class="results">
+    <div v-if="activeTab === 'search'">
       <div v-if="loading" class="loading">搜索中...</div>
 
       <template v-if="!loading && pagedResults.length">
@@ -972,7 +974,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 历史记录 -->
-    <div v-if="activeTab === 'history'" class="results">
+    <div v-if="activeTab === 'history'">
       <div v-if="!bilibiliUser" class="empty-state">
         <div class="empty-icon">🔒</div>
         <div class="empty-text">请先登录查看历史记录</div>
@@ -1037,7 +1039,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 稍后再看 -->
-    <div v-if="activeTab === 'toview'" class="results">
+    <div v-if="activeTab === 'toview'">
       <div v-if="toviewLoading" class="loading">加载中...</div>
 
       <template v-else-if="!toviewLoading && toviewPagedData.length">
@@ -1100,6 +1102,7 @@ onUnmounted(() => {
         <div class="empty-icon">📋</div>
         <div class="empty-text">稍后再看列表为空</div>
       </div>
+    </div>
     </div>
   </div>
 </template>
@@ -1439,6 +1442,14 @@ onUnmounted(() => {
 }
 
 /* 结果列表 */
+.results-wrapper {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .results {
   flex: 1;
   overflow: hidden;
