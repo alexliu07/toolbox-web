@@ -1,10 +1,18 @@
 <script setup>
-import { ref, computed, nextTick, inject, onMounted, onUnmounted, shallowRef, markRaw } from 'vue'
-import NPlayer, { Popover } from 'nplayer'
-import Danmaku from '@nplayer/danmaku'
-import { MediaPlayer } from 'dashjs'
+import { ref, computed, nextTick, inject, onMounted, onUnmounted, markRaw } from 'vue'
+import BilibiliPlayer from './BilibiliPlayer.vue'
 
 const authFetch = inject('authFetch')
+const openWindow = inject('openWindow')
+const closeWindow = inject('closeWindow')
+const bringToFront = inject('bringToFront')
+const windows = inject('windows')
+
+let playerWindowId = null
+
+function isPlayerWindowOpen() {
+  return playerWindowId && windows.value.some(w => w.id === playerWindowId)
+}
 
 // 卡片高度(90封面+20padding+2border) + gap
 const CARD_HEIGHT = 112
@@ -37,23 +45,6 @@ const totalPages = computed(() => Math.max(1, Math.ceil(searchTotal.value / page
 // 当前播放视频
 const currentVideo = ref(null)
 const currentBvid = ref('')
-const currentCid = ref('')
-const streamUrl = ref('')
-const danmakuOid = ref('')
-const pageList = ref([])
-const currentPageIndex = ref(0)
-const isPlaying = ref(false)
-const playerContainerRef = ref(null)
-// 使用 shallowRef 避免 Vue 代理破坏 DPlayer 内部状态
-let dp = shallowRef(null)
-let dashPlayerInstance = null
-let playerResizeObserver = null
-const showPlayer = ref(false)
-
-const loadingStream = ref(false)
-const infoCollapsed = ref(false) // 视频简介区域是否收起
-const videoInfo = ref(null) // 视频详细信息（UP主、简介、统计数据等）
-const pendingSeekTime = ref(null) // 自动跳转到上次播放进度（秒）
 
 // 登录状态
 const bilibiliUser = ref(null)
@@ -425,331 +416,51 @@ function formatProgress(progress, duration) {
   return Math.min(100, Math.round((progress / duration) * 100))
 }
 
-// 点击播放视频
+// 点击播放视频 — 在独立窗口中打开播放器
 async function playVideo(video) {
-  if (currentBvid.value === video.bvid) {
-    showPlayer.value = !showPlayer.value
+  // 同一视频 → 将已有窗口置顶
+  if (currentBvid.value === video.bvid && isPlayerWindowOpen()) {
+    bringToFront(playerWindowId)
     return
   }
 
+  // 不同视频或窗口已关闭 → 关闭旧窗口（触发 onUnmounted 上报进度）
+  if (isPlayerWindowOpen()) {
+    closeWindow(playerWindowId)
+  }
+  playerWindowId = null
+
   currentVideo.value = video
   currentBvid.value = video.bvid
-  showPlayer.value = true
-  loadingStream.value = true
-  isPlaying.value = false
-  streamUrl.value = ''
 
+  // 获取分页列表
+  let pageList
   try {
-    // 获取视频分页列表 + 视频详细信息（并行请求）
-    const [cidRes, infoRes] = await Promise.all([
-      authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`),
-      authFetch(`/api/bilibili/videoinfo?bvid=${encodeURIComponent(video.bvid)}`)
-    ])
+    const cidRes = await authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
     const cidData = await cidRes.json()
-    if (cidData.code !== 0 || !cidData.data?.length) {
-      throw new Error('获取视频信息失败')
-    }
-    pageList.value = cidData.data
-    currentPageIndex.value = 0
-    currentCid.value = cidData.data[0].cid
-    danmakuOid.value = cidData.data[0].cid
-    pendingSeekTime.value = null
-
-    // 解析视频详细信息
-    try {
-      const infoData = await infoRes.json()
-      videoInfo.value = infoData.code === 0 ? infoData.data : null
-    } catch (e) {
-      console.warn('Failed to parse video info:', e)
-      videoInfo.value = null
-    }
-
-    // 获取视频流地址（同时从响应头获取播放进度）
-    await fetchStreamUrl()
+    if (cidData.code !== 0 || !cidData.data?.length) throw new Error('获取视频信息失败')
+    pageList = cidData.data
   } catch (e) {
     console.error('Play video error:', e)
     alert('播放失败: ' + e.message)
-    closePlayer()
-  }
-}
-
-// 初始化 NPlayer + dash.js
-async function initNPlayer() {
-  try {
-    if (dp.value) {
-      dp.value.dispose()
-      dp.value = null
-    }
-    if (!streamUrl.value) {
-      console.warn('initNPlayer: no streamUrl')
-      return
-    }
-    if (!playerContainerRef.value) {
-      console.warn('initNPlayer: container not ready, retrying...')
-      setTimeout(initNPlayer, 100)
-      return
-    }
-
-    // 获取弹幕
-    let danmakuItems = []
-    if (danmakuOid.value) {
-      try {
-        const res = await authFetch(`/api/bilibili/danmaku/?id=${danmakuOid.value}`)
-        const data = await res.json()
-        if (data.code === 0 && Array.isArray(data.data)) {
-          danmakuItems = data.data.map(([time, type, color, , text]) => ({
-            time: time,
-            text: text,
-            color: '#' + color.toString(16).padStart(6, '0'),
-            type: type === 5 ? 'top' : type === 4 ? 'bottom' : 'scroll'
-          })).sort((a, b) => a.time - b.time)
-        }
-      } catch (e) {
-        console.warn('Failed to fetch danmaku:', e)
-      }
-    }
-
-    const danmaku = new Danmaku({ items: danmakuItems, persistOptions: true })
-
-    const Quantity = {
-      el: document.createElement('div'),
-      init() {
-        this.btn = document.createElement('div')
-        this.btn.textContent = '画质'
-        this.el.appendChild(this.btn)
-        this.popover = new Popover(this.el)
-        this.btn.addEventListener('click', () => this.popover.show())
-        this.el.style.display = 'none'
-        this.el.classList.add('quantity')
-      }
-    }
-    // 创建 NPlayer
-    const player = new NPlayer({
-      controls:[
-        [
-          "play",
-          "volume",
-          "time",
-          "spacer",
-          Quantity,
-          "airplay",
-          "settings",
-          "web-fullscreen",
-          "fullscreen"
-        ],
-        ["progress"]
-      ],
-      plugins:[danmaku]
-    })
-
-    dp.value = markRaw(player)
-
-    dp.value.on('play', () => { isPlaying.value = true })
-    dp.value.on('pause', () => { isPlaying.value = false })
-    dp.value.on('ended', () => { isPlaying.value = false })
-
-    // 使用 dash.js 加载后端生成的 MPD 清单
-    const dashPlayerInstance = MediaPlayer().create()
-    dashPlayerInstance.initialize(dp.value.video, streamUrl.value, true)
-    let repLabelMap = new Map();
-    dashPlayerInstance.on(MediaPlayer.events.MANIFEST_LOADED,(e=>{
-      const adaptations = e.data.Period[0].AdaptationSet;
-      const videoAdapt = adaptations.find(a =>
-          a.contentType === 'video' || a.mimeType?.startsWith('video')
-      );
-      videoAdapt?.Representation?.forEach(rep => {
-        const label = rep.Label?.[0].__text || rep.label
-        repLabelMap.set(String(rep.id), label);
-      });
-    }))
-
-    dashPlayerInstance.on(MediaPlayer.events.STREAM_INITIALIZED,()=>{
-      // 获取所有清晰度，按分辨率从高到低排序
-      dashPlayerInstance.getTracksFor()
-      const levels = dashPlayerInstance.getRepresentationsByType('video')
-      levels.sort((a, b) => b.height - a.height)
-      const frag = document.createDocumentFragment()
-      // 5. 切换清晰度的逻辑
-      const listener = (index) => (init) => {
-        // 更新高亮样式
-        const prevEl = Quantity.itemElements[Quantity.value]
-        const curEl = Quantity.itemElements[index]
-        if (prevEl) prevEl.classList.remove('quantity_item-active')
-        if (curEl) curEl.classList.add('quantity_item-active')
-
-        Quantity.btn.textContent = index === -1 ? '自动' : (levels[index].label || curEl.textContent)
-        Quantity.value = index
-        Quantity.popover.hide()
-        if (index === -1) {
-          // 自动模式：开启 ABR 自适应
-          dashPlayerInstance.updateSettings({
-            streaming: {abr: {autoSwitchBitrate: {video: true, audio: true}}}
-          })
-        } else {
-          // 手动模式：关闭 ABR，指定清晰度
-          dashPlayerInstance.updateSettings({
-            streaming: {abr: {autoSwitchBitrate: {video: false,audio: true}}}
-          })
-          // dash.js 的 index 对应排序后的原始 qualityIndex
-          dashPlayerInstance.setRepresentationForTypeById('video', levels[index].id)
-        }
-      }
-      // 6. 生成清晰度菜单项
-      Quantity.itemElements = levels.map((l, i) => {
-        const el = document.createElement('div')
-        el.textContent = repLabelMap.get(String(i)) || l.height + 'P'
-        el.classList.add('quantity_item')
-        el.addEventListener('click', () => listener(i)())
-        frag.appendChild(el)
-        return el
-      })
-      dashPlayerInstance.on(MediaPlayer.events.QUALITY_CHANGE_REQUESTED, (e) => {
-        console.log('切换请求:', e);
-      });
-
-      dashPlayerInstance.on(MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
-        console.log('切换生效:', e); // 实际渲染的新清晰度
-      });
-
-      // 7. 添加「自动」选项
-      const autoEl = document.createElement('div')
-      autoEl.textContent = '自动'
-      autoEl.classList.add('quantity_item')
-      autoEl.addEventListener('click', () => listener(-1)())
-      frag.appendChild(autoEl)
-      Quantity.itemElements.push(autoEl)
-
-      Quantity.popover.panelEl.appendChild(frag)
-      Quantity.el.style.display = 'block'
-
-      // 初始化为自动模式
-      listener(-1)(true)
-
-      // 自动跳转到上次播放进度
-      if (pendingSeekTime.value != null) {
-        const seekTo = pendingSeekTime.value
-        pendingSeekTime.value = null
-        setTimeout(() => {
-          if (dp.value && dp.value.video) {
-            dp.value.video.currentTime = seekTo
-          }
-        }, 300)
-      }
-    })
-    dp.value.mount(playerContainerRef.value)
-
-
-    // 修复窗口动画完成前容器宽度为 0 导致弹幕不滚动
-    setTimeout(() => {
-      if (dp.value) dp.value.emit('resize')
-    }, 300)
-
-    // 监听容器尺寸变化
-    if (playerResizeObserver) playerResizeObserver.disconnect()
-    playerResizeObserver = new ResizeObserver(() => {
-      if (dp.value) dp.value.emit('resize')
-    })
-    playerResizeObserver.observe(playerContainerRef.value)
-
-    console.log('NPlayer + dash.js initialized')
-  } catch (e) {
-    console.error('initNPlayer error:', e)
-  }
-}
-
-async function fetchStreamUrl() {
-  if (!currentBvid.value || !currentCid.value) return
-  try {
-    // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
-    const response = await authFetch(`/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`)
-    // 从响应头中获取上次播放进度（后端复用同一个 playurl 响应）
-    const lastPlayTime = response.headers.get('X-Last-Play-Time')
-    if (lastPlayTime) {
-      pendingSeekTime.value = parseInt(lastPlayTime) / 1000 // 毫秒转秒
-    }
-    const mpdText = await response.text();
-    const modified = mpdText.replaceAll('/api', `${window.location.origin}/api`);
-    const blob = new Blob([modified], { type: 'application/dash+xml' });
-    streamUrl.value = URL.createObjectURL(blob)
-
-    // 等待 DOM 更新后初始化 NPlayer
-    nextTick(() => {
-      initNPlayer()
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          loadingStream.value = false
-        })
-      })
-    })
-  } catch (e) {
-    console.error('Fetch stream URL error:', e)
-    loadingStream.value = false
-  }
-}
-
-function closePlayer() {
-  // 上报观看进度
-  try {
-    const video = dp.value?.video
-    const aid = currentVideo.value?.aid
-    if (video && aid && currentCid.value) {
-      const progress = Math.floor(video.currentTime)
-      authFetch('/api/bilibili/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aid, cid: parseInt(currentCid.value), progress })
-      }).catch(e => console.warn('Report progress failed:', e))
-    }
-  } catch (e) {
-    console.warn('Report progress error:', e)
+    return
   }
 
-  showPlayer.value = false
-  if (dashPlayerInstance) {
-    dashPlayerInstance.reset()
-    dashPlayerInstance = null
-  }
-  if (playerResizeObserver) {
-    playerResizeObserver.disconnect()
-    playerResizeObserver = null
-  }
-  if (dp.value) {
-    dp.value.dispose()
-    dp.value = null
-  }
-  isPlaying.value = false
-  currentVideo.value = null
-  videoInfo.value = null
-  currentBvid.value = ''
-  currentCid.value = ''
-  streamUrl.value = ''
-  danmakuOid.value = ''
-  pageList.value = []
-  currentPageIndex.value = 0
-  pendingSeekTime.value = null
-}
-
-async function switchEpisode(index) {
-  if (index === currentPageIndex.value) return
-  const page = pageList.value[index]
-  if (!page) return
-  currentPageIndex.value = index
-  currentCid.value = page.cid
-  danmakuOid.value = page.cid
-  pendingSeekTime.value = null
-  loadingStream.value = true
-  isPlaying.value = false
-  if (dashPlayerInstance) {
-    dashPlayerInstance.reset()
-    dashPlayerInstance = null
-  }
-  if (dp.value) {
-    dp.value.dispose()
-    dp.value = null
-  }
-
-  // 获取视频流地址（同时从响应头获取播放进度）
-  await fetchStreamUrl()
+  // 打开独立播放器窗口
+  playerWindowId = openWindow({
+    title: cleanTitle(video.title),
+    icon: '📺',
+    width: 1050,
+    height: 650,
+    component: markRaw(BilibiliPlayer),
+    props: {
+      bvid: video.bvid,
+      aid: video.aid,
+      title: video.title,
+      pageList,
+      initialCid: pageList[0].cid,
+    },
+  })
 }
 
 onMounted(() => {
@@ -767,10 +478,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resultsResizeObserver) resultsResizeObserver.disconnect()
-  if (playerResizeObserver) playerResizeObserver.disconnect()
-  if (dp.value) {
-    dp.value.dispose()
-    dp.value = null
+  if (playerWindowId) {
+    closeWindow(playerWindowId)
+    playerWindowId = null
   }
   if (qrPollTimer) {
     clearInterval(qrPollTimer)
@@ -781,90 +491,6 @@ onUnmounted(() => {
 
 <template>
   <div class="bilibili">
-    <!-- 播放器覆盖层 -->
-    <transition name="player-fade">
-      <div v-if="showPlayer && currentVideo" class="player-overlay">
-        <div class="player-header">
-          <div class="player-title">{{ cleanTitle(currentVideo.title) }}</div>
-          <div class="player-info">
-            <span class="player-author">{{ currentVideo.author }}</span>
-            <span class="player-stat">{{ formatCount(currentVideo.play) }}播放</span>
-            <span class="player-stat">{{ formatCount(currentVideo.favorites) }}收藏</span>
-          </div>
-          <div class="player-controls">
-            <button class="player-close-btn" @click="closePlayer()" title="关闭">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-        </div>
-        <div class="player-body">
-          <div v-if="loadingStream" class="player-loading">
-            <div class="loading-spinner"></div>
-            <span>正在获取播放地址...</span>
-          </div>
-          <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
-          <template v-else>
-            <div ref="playerContainerRef" class="nplayer-container has-sidebar" :class="{ 'sidebar-collapsed': infoCollapsed }"></div>
-            <div class="video-sidebar" :class="{ collapsed: infoCollapsed }">
-              <div class="sidebar-toggle-bar">
-                <button class="sidebar-toggle" @click="infoCollapsed = !infoCollapsed" :title="infoCollapsed ? '展开信息' : '收起信息'">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline v-if="infoCollapsed" points="15 18 9 12 15 6"/>
-                    <polyline v-else points="9 18 15 12 9 6"/>
-                  </svg>
-                </button>
-              </div>
-              <template v-if="!infoCollapsed">
-                <!-- UP主信息 -->
-                <div v-if="videoInfo?.owner" class="info-up">
-                  <img :src="proxyAvatar(videoInfo.owner.face)" class="info-up-avatar" />
-                  <span class="info-up-name">{{ videoInfo.owner.name }}</span>
-                </div>
-                <!-- 视频标题 -->
-                <div class="info-title">{{ videoInfo?.title || cleanTitle(currentVideo?.title || '') }}</div>
-                <!-- 统计数据 -->
-                <div v-if="videoInfo?.stat" class="info-stats">
-                  <span class="info-stat">{{ formatCount(videoInfo.stat.view) }}播放</span>
-                  <span class="info-stat">{{ formatCount(videoInfo.stat.danmaku) }}弹幕</span>
-                  <span class="info-stat">{{ formatDate(videoInfo.pubdate) }}</span>
-                </div>
-                <!-- 简介 -->
-                <div v-if="videoInfo?.desc_v2?.length || videoInfo?.desc" class="info-desc-section">
-                  <div class="info-desc-label">简介</div>
-                  <div class="info-desc">
-                    <template v-if="videoInfo?.desc_v2?.length">
-                      <template v-for="(seg, i) in videoInfo.desc_v2" :key="i">
-                        <a v-if="seg.type === 2" :href="`https://space.bilibili.com/${seg.biz_id}`" target="_blank" class="info-desc-at">@{{ seg.raw_text }}</a>
-                        <span v-else>{{ seg.raw_text }}</span>
-                      </template>
-                    </template>
-                    <template v-else>{{ videoInfo?.desc }}</template>
-                  </div>
-                </div>
-                <!-- 分集列表 -->
-                <div v-if="pageList.length > 1" class="info-episodes">
-                  <div class="info-ep-label">选集 ({{ pageList.length }})</div>
-                  <div class="info-ep-list">
-                    <button
-                      v-for="(page, idx) in pageList"
-                      :key="page.cid"
-                      class="info-ep-item"
-                      :class="{ active: idx === currentPageIndex }"
-                      @click="switchEpisode(idx)"
-                    >
-                      <span class="info-ep-index">{{ idx + 1 }}</span>
-                      <span class="info-ep-name">{{ page.part || `第${idx + 1}集` }}</span>
-                      <span class="info-ep-dur">{{ formatDuration(page.duration ? formatSeconds(page.duration) : '') }}</span>
-                    </button>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </template>
-        </div>
-      </div>
-    </transition>
-
     <!-- 登录覆盖层 -->
     <transition name="player-fade">
       <div v-if="showLogin" class="login-overlay" @click.self="closeLogin()">
@@ -1152,385 +778,6 @@ onUnmounted(() => {
   box-sizing: border-box;
   color: #e0e0e0;
   overflow: hidden;
-}
-
-/* 播放器覆盖层 */
-.player-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 100;
-  background: rgba(10, 12, 20, 0.97);
-  display: flex;
-  flex-direction: column;
-}
-
-.player-fade-enter-active,
-.player-fade-leave-active {
-  transition: opacity 0.25s ease;
-}
-
-.player-fade-enter-from,
-.player-fade-leave-to {
-  opacity: 0;
-}
-
-.player-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
-}
-
-.player-title {
-  flex: 1;
-  font-size: 15px;
-  font-weight: 500;
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.player-author {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.player-stat {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
-}
-
-.player-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.player-close-btn {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.6);
-  cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
-}
-
-.player-close-btn:hover {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.25);
-}
-
-.player-body {
-  flex: 1;
-  display: block;
-  position: relative;
-  overflow: hidden;
-  padding: 16px;
-  box-sizing: border-box;
-}
-
-.player-loading,
-.player-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 14px;
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid rgba(255, 255, 255, 0.1);
-  border-top-color: #00a1d6;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.nplayer-container {
-  width: 100%;
-  height: 100%;
-  border-radius: 8px;
-  overflow: hidden;
-  position: absolute;
-  inset: 0;
-}
-
-.nplayer-container.has-sidebar {
-  right: 260px;
-  width: auto;
-  transition: right 0.2s ease;
-}
-
-.nplayer-container.has-sidebar.sidebar-collapsed {
-  right: 36px;
-}
-
-/* 视频信息侧栏 */
-.video-sidebar {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 250px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: rgba(10, 12, 20, 0.92);
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0 8px 8px 0;
-  transition: width 0.2s ease;
-  overflow: hidden;
-}
-
-.video-sidebar.collapsed {
-  width: 36px;
-}
-
-.sidebar-toggle-bar {
-  display: flex;
-  align-items: center;
-  padding: 8px 6px;
-  flex-shrink: 0;
-}
-
-.sidebar-toggle {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.5);
-  cursor: pointer;
-  border-radius: 4px;
-  padding: 0;
-  transition: background 0.15s, color 0.15s;
-}
-
-.sidebar-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-}
-
-/* UP主信息 */
-.info-up {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px 12px;
-  flex-shrink: 0;
-}
-
-.info-up-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.info-up-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 视频标题 */
-.info-title {
-  padding: 0 14px 8px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-/* 统计数据 */
-.info-stats {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px 10px;
-  flex-shrink: 0;
-}
-
-.info-stat {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
-}
-
-/* 简介 */
-.info-desc-section {
-  padding: 0 14px 10px;
-  flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.info-desc-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.45);
-  margin-bottom: 6px;
-}
-
-.info-desc {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.info-desc::-webkit-scrollbar {
-  width: 3px;
-}
-
-.info-desc::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.info-desc::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 2px;
-}
-
-.info-desc-at {
-  color: #00a1d6;
-  text-decoration: none;
-}
-
-.info-desc-at:hover {
-  text-decoration: underline;
-}
-
-/* 分集列表 */
-.info-episodes {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding-top: 8px;
-}
-
-.info-ep-label {
-  padding: 0 14px 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.45);
-  flex-shrink: 0;
-}
-
-.info-ep-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 6px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.info-ep-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.info-ep-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.info-ep-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 2px;
-}
-
-.info-ep-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  border: none;
-  background: none;
-  color: rgba(255, 255, 255, 0.65);
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.15s, color 0.15s;
-  min-width: 0;
-}
-
-.info-ep-item:hover {
-  background: rgba(255, 255, 255, 0.07);
-  color: #fff;
-}
-
-.info-ep-item.active {
-  background: rgba(0, 161, 214, 0.2);
-  color: #00a1d6;
-}
-
-.info-ep-index {
-  font-size: 11px;
-  font-weight: 600;
-  color: inherit;
-  opacity: 0.6;
-  width: 18px;
-  flex-shrink: 0;
-  text-align: center;
-}
-
-.info-ep-name {
-  flex: 1;
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.info-ep-dur {
-  font-size: 11px;
-  opacity: 0.45;
-  flex-shrink: 0;
-}
-
-/* 确保 NPlayer 内部元素填满容器 */
-:deep(.nplayer) {
-  width: 100% !important;
-  height: 100% !important;
-}
-
-:deep(.nplayer video) {
-  object-fit: contain;
 }
 
 /* 搜索栏 */
@@ -2052,26 +1299,16 @@ onUnmounted(() => {
   background: rgba(0, 161, 214, 0.7);
 }
 
-:deep(.quantity) {
-  position: relative;
-  padding: 0 8px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: bold;
-  white-space: nowrap;
-  opacity: 0.8;
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #00a1d6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
-:deep(.quantity:hover) {
-  opacity: 1;
-}
-:deep(.quantity_item) {
-  padding: 5px 20px;
-  font-weight: normal;
-}
-:deep(.quantity_item:hover) {
-  background: rgba(255, 255, 255, 0.3);
-}
-:deep(.quantity_item-active) {
-  color: var(--theme-color);
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>
