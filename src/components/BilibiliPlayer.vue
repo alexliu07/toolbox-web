@@ -372,6 +372,7 @@ onUnmounted(() => {
   inset: 0;
   border-radius: 8px;
   overflow: hidden;
+  z-index: 1;
 }
 
 .nplayer-container.has-sidebar {
@@ -393,6 +394,7 @@ onUnmounted(() => {
   border-radius: 0 8px 8px 0;
   transition: width 0.2s ease;
   overflow: hidden;
+  z-index: 2;
 }
 
 .video-sidebar.collapsed { width: 36px; }
