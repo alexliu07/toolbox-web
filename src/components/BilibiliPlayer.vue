@@ -279,7 +279,7 @@ onUnmounted(() => {
     </div>
     <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
     <template v-else>
-      <div ref="playerContainerRef" class="nplayer-container" :class="{ 'has-sidebar': !infoCollapsed }"></div>
+      <div ref="playerContainerRef" class="nplayer-container"></div>
       <div class="video-sidebar" :class="{ collapsed: infoCollapsed }">
         <div class="sidebar-toggle-bar">
           <button class="sidebar-toggle" @click="infoCollapsed = !infoCollapsed" :title="infoCollapsed ? '展开信息' : '收起信息'">
@@ -336,7 +336,7 @@ onUnmounted(() => {
 
 <style scoped>
 .player-root {
-  position: relative;
+  display: flex;
   width: 100%;
   height: 100%;
   background: rgba(10, 12, 20, 0.97);
@@ -368,33 +368,23 @@ onUnmounted(() => {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .nplayer-container {
-  position: absolute;
-  inset: 0;
+  flex: 1;
+  min-width: 0;
   border-radius: 8px;
   overflow: hidden;
-  z-index: 1;
-}
-
-.nplayer-container.has-sidebar {
-  right: 250px;
-  width: auto;
 }
 
 /* 侧栏 */
 .video-sidebar {
-  position: absolute;
-  top: 0;
-  right: 0;
   width: 250px;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: rgba(10, 12, 20, 0.92);
   border-left: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0 8px 8px 0;
   transition: width 0.2s ease;
   overflow: hidden;
-  z-index: 2;
+  flex-shrink: 0;
 }
 
 .video-sidebar.collapsed { width: 36px; }
