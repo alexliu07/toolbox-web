@@ -357,6 +357,45 @@ router.get('/pagelist', optionalAuth, async (req, res) => {
   }
 })
 
+// 获取视频详细信息（UP主、简介、统计数据等）
+router.get('/videoinfo', optionalAuth, async (req, res) => {
+  try {
+    const { bvid } = req.query
+    if (!bvid) {
+      return res.status(400).json({ code: -400, message: 'bvid is required' })
+    }
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/x/web-interface/view', { bvid }, cookieStr ? { cookies: cookieStr } : {})
+    if (data.code !== 0) {
+      return res.json({ code: data.code, message: data.message || 'videoinfo error' })
+    }
+    const d = data.data
+    res.json({
+      code: 0,
+      data: {
+        title: d.title,
+        desc: d.desc,
+        desc_v2: d.desc_v2 || [],
+        pubdate: d.pubdate,
+        owner: d.owner ? { mid: d.owner.mid, name: d.owner.name, face: d.owner.face } : null,
+        stat: d.stat ? {
+          view: d.stat.view,
+          danmaku: d.stat.danmaku,
+          reply: d.stat.reply,
+          favorite: d.stat.favorite,
+          coin: d.stat.coin,
+          share: d.stat.share,
+          like: d.stat.like,
+        } : null,
+        pages: d.pages || [],
+      }
+    })
+  } catch (e) {
+    console.error('Bilibili videoinfo error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 // 生成 MPD 清单文件（供 dash.js 播放）
 router.get('/mpd', optionalAuth, async (req, res) => {
   try {
@@ -447,6 +486,12 @@ router.get('/mpd', optionalAuth, async (req, res) => {
     ${adaptationSets}
   </Period>
 </MPD>`
+
+    // 同时返回上次播放进度（复用同一个 playurl 响应，无需额外请求）
+    const lastPlayTime = data.data?.last_play_time ?? null
+    if (lastPlayTime != null) {
+      res.setHeader('X-Last-Play-Time', lastPlayTime)
+    }
 
     res.setHeader('Content-Type', 'application/dash+xml')
     res.send(mpdXml)
@@ -657,42 +702,6 @@ router.get('/danmaku/', async (req, res) => {
   } catch (e) {
     console.error('Danmaku error:', e.message)
     res.json({ code: 1, msg: e.message })
-  }
-})
-
-// 获取上次播放进度（last_play_time + last_play_cid）
-router.get('/lastplay', optionalAuth, async (req, res) => {
-  try {
-    const { bvid, cid } = req.query
-    if (!bvid || !cid) {
-      return res.status(400).json({ code: -400, message: 'bvid and cid are required' })
-    }
-
-    await fetchWbiKeys()
-    const cookieStr = getCookiesString(req.user?.id)
-    const cookieOpt = cookieStr ? { cookies: cookieStr } : {}
-
-    const params = signWBI({
-      bvid,
-      cid: parseInt(cid),
-      fnval: 16,
-      fnver: 0,
-    })
-    const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieOpt)
-    if (data.code !== 0) {
-      return res.json({ code: data.code, message: data.message || 'playurl error' })
-    }
-
-    res.json({
-      code: 0,
-      data: {
-        last_play_time: data.data?.last_play_time ?? null,
-        last_play_cid: data.data?.last_play_cid ?? null,
-      }
-    })
-  } catch (e) {
-    console.error('Bilibili lastplay error:', e.message)
-    res.status(500).json({ code: -500, message: e.message })
   }
 })
 

@@ -51,7 +51,8 @@ let playerResizeObserver = null
 const showPlayer = ref(false)
 
 const loadingStream = ref(false)
-const episodeCollapsed = ref(false)
+const infoCollapsed = ref(false) // 视频简介区域是否收起
+const videoInfo = ref(null) // 视频详细信息（UP主、简介、统计数据等）
 const pendingSeekTime = ref(null) // 自动跳转到上次播放进度（秒）
 
 // 登录状态
@@ -439,8 +440,11 @@ async function playVideo(video) {
   streamUrl.value = ''
 
   try {
-    // 获取视频分页列表（获取cid）
-    const cidRes = await authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
+    // 获取视频分页列表 + 视频详细信息（并行请求）
+    const [cidRes, infoRes] = await Promise.all([
+      authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`),
+      authFetch(`/api/bilibili/videoinfo?bvid=${encodeURIComponent(video.bvid)}`)
+    ])
     const cidData = await cidRes.json()
     if (cidData.code !== 0 || !cidData.data?.length) {
       throw new Error('获取视频信息失败')
@@ -451,23 +455,16 @@ async function playVideo(video) {
     danmakuOid.value = cidData.data[0].cid
     pendingSeekTime.value = null
 
-    // 获取上次播放进度并自动跳转（仅登录用户）
-    if (bilibiliUser.value) {
-      try {
-        const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(video.bvid)}&cid=${currentCid.value}`)
-        const lpData = await lpRes.json()
-        if (lpData.code === 0 && lpData.data) {
-          const { last_play_time } = lpData.data
-          if (last_play_time) {
-            pendingSeekTime.value = last_play_time / 1000 // 毫秒转秒
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to fetch last play info:', e)
-      }
+    // 解析视频详细信息
+    try {
+      const infoData = await infoRes.json()
+      videoInfo.value = infoData.code === 0 ? infoData.data : null
+    } catch (e) {
+      console.warn('Failed to parse video info:', e)
+      videoInfo.value = null
     }
 
-    // 获取视频流地址
+    // 获取视频流地址（同时从响应头获取播放进度）
     await fetchStreamUrl()
   } catch (e) {
     console.error('Play video error:', e)
@@ -665,6 +662,11 @@ async function fetchStreamUrl() {
   try {
     // 后端生成的 MPD 清单 URL（包含代理后的视频/音频 BaseURL）
     const response = await authFetch(`/api/bilibili/mpd?bvid=${encodeURIComponent(currentBvid.value)}&cid=${currentCid.value}`)
+    // 从响应头中获取上次播放进度（后端复用同一个 playurl 响应）
+    const lastPlayTime = response.headers.get('X-Last-Play-Time')
+    if (lastPlayTime) {
+      pendingSeekTime.value = parseInt(lastPlayTime) / 1000 // 毫秒转秒
+    }
     const mpdText = await response.text();
     const modified = mpdText.replaceAll('/api', `${window.location.origin}/api`);
     const blob = new Blob([modified], { type: 'application/dash+xml' });
@@ -717,6 +719,7 @@ function closePlayer() {
   }
   isPlaying.value = false
   currentVideo.value = null
+  videoInfo.value = null
   currentBvid.value = ''
   currentCid.value = ''
   streamUrl.value = ''
@@ -745,22 +748,7 @@ async function switchEpisode(index) {
     dp.value = null
   }
 
-  // 获取该分集的播放进度（仅登录用户）
-  if (bilibiliUser.value) {
-    try {
-      const lpRes = await authFetch(`/api/bilibili/lastplay?bvid=${encodeURIComponent(currentBvid.value)}&cid=${page.cid}`)
-      const lpData = await lpRes.json()
-      if (lpData.code === 0 && lpData.data) {
-        const { last_play_time } = lpData.data
-        if (last_play_time) {
-          pendingSeekTime.value = last_play_time / 1000
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to fetch last play info:', e)
-    }
-  }
-
+  // 获取视频流地址（同时从响应头获取播放进度）
   await fetchStreamUrl()
 }
 
@@ -816,30 +804,61 @@ onUnmounted(() => {
           </div>
           <div v-else-if="!streamUrl" class="player-error">无法获取播放地址</div>
           <template v-else>
-            <div ref="playerContainerRef" class="nplayer-container" :class="{ 'has-episodes': pageList.length > 1, 'episode-collapsed': pageList.length > 1 && episodeCollapsed }"></div>
-            <div v-if="pageList.length > 1" class="episode-panel" :class="{ collapsed: episodeCollapsed }">
-              <div class="episode-title">
-                <button class="episode-toggle" @click="episodeCollapsed = !episodeCollapsed" :title="episodeCollapsed ? '展开选集' : '收起选集'">
+            <div ref="playerContainerRef" class="nplayer-container has-sidebar" :class="{ 'sidebar-collapsed': infoCollapsed }"></div>
+            <div class="video-sidebar" :class="{ collapsed: infoCollapsed }">
+              <div class="sidebar-toggle-bar">
+                <button class="sidebar-toggle" @click="infoCollapsed = !infoCollapsed" :title="infoCollapsed ? '展开信息' : '收起信息'">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline v-if="episodeCollapsed" points="15 18 9 12 15 6"/>
+                    <polyline v-if="infoCollapsed" points="15 18 9 12 15 6"/>
                     <polyline v-else points="9 18 15 12 9 6"/>
                   </svg>
                 </button>
-                <span v-if="!episodeCollapsed">选集 ({{ pageList.length }})</span>
               </div>
-              <div v-if="!episodeCollapsed" class="episode-list">
-                <button
-                  v-for="(page, idx) in pageList"
-                  :key="page.cid"
-                  class="episode-item"
-                  :class="{ active: idx === currentPageIndex }"
-                  @click="switchEpisode(idx)"
-                >
-                  <span class="episode-index">{{ idx + 1 }}</span>
-                  <span class="episode-name">{{ page.part || `第${idx + 1}集` }}</span>
-                  <span class="episode-dur">{{ formatDuration(page.duration ? formatSeconds(page.duration) : '') }}</span>
-                </button>
-              </div>
+              <template v-if="!infoCollapsed">
+                <!-- UP主信息 -->
+                <div v-if="videoInfo?.owner" class="info-up">
+                  <img :src="proxyAvatar(videoInfo.owner.face)" class="info-up-avatar" />
+                  <span class="info-up-name">{{ videoInfo.owner.name }}</span>
+                </div>
+                <!-- 视频标题 -->
+                <div class="info-title">{{ videoInfo?.title || cleanTitle(currentVideo?.title || '') }}</div>
+                <!-- 统计数据 -->
+                <div v-if="videoInfo?.stat" class="info-stats">
+                  <span class="info-stat">{{ formatCount(videoInfo.stat.view) }}播放</span>
+                  <span class="info-stat">{{ formatCount(videoInfo.stat.danmaku) }}弹幕</span>
+                  <span class="info-stat">{{ formatDate(videoInfo.pubdate) }}</span>
+                </div>
+                <!-- 简介 -->
+                <div v-if="videoInfo?.desc_v2?.length || videoInfo?.desc" class="info-desc-section">
+                  <div class="info-desc-label">简介</div>
+                  <div class="info-desc">
+                    <template v-if="videoInfo?.desc_v2?.length">
+                      <template v-for="(seg, i) in videoInfo.desc_v2" :key="i">
+                        <a v-if="seg.type === 2" :href="`https://space.bilibili.com/${seg.biz_id}`" target="_blank" class="info-desc-at">@{{ seg.raw_text }}</a>
+                        <span v-else>{{ seg.raw_text }}</span>
+                      </template>
+                    </template>
+                    <template v-else>{{ videoInfo?.desc }}</template>
+                  </div>
+                </div>
+                <!-- 分集列表 -->
+                <div v-if="pageList.length > 1" class="info-episodes">
+                  <div class="info-ep-label">选集 ({{ pageList.length }})</div>
+                  <div class="info-ep-list">
+                    <button
+                      v-for="(page, idx) in pageList"
+                      :key="page.cid"
+                      class="info-ep-item"
+                      :class="{ active: idx === currentPageIndex }"
+                      @click="switchEpisode(idx)"
+                    >
+                      <span class="info-ep-index">{{ idx + 1 }}</span>
+                      <span class="info-ep-name">{{ page.part || `第${idx + 1}集` }}</span>
+                      <span class="info-ep-dur">{{ formatDuration(page.duration ? formatSeconds(page.duration) : '') }}</span>
+                    </button>
+                  </div>
+                </div>
+              </template>
             </div>
           </template>
         </div>
@@ -1258,22 +1277,22 @@ onUnmounted(() => {
   inset: 0;
 }
 
-.nplayer-container.has-episodes {
-  right: 220px;
+.nplayer-container.has-sidebar {
+  right: 260px;
   width: auto;
   transition: right 0.2s ease;
 }
 
-.nplayer-container.has-episodes.episode-collapsed {
+.nplayer-container.has-sidebar.sidebar-collapsed {
   right: 36px;
 }
 
-/* 分集面板 */
-.episode-panel {
+/* 视频信息侧栏 */
+.video-sidebar {
   position: absolute;
   top: 0;
   right: 0;
-  width: 210px;
+  width: 250px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1281,27 +1300,21 @@ onUnmounted(() => {
   border-left: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0 8px 8px 0;
   transition: width 0.2s ease;
+  overflow: hidden;
 }
 
-.episode-panel.collapsed {
+.video-sidebar.collapsed {
   width: 36px;
 }
 
-.episode-title {
+.sidebar-toggle-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.5);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 6px;
   flex-shrink: 0;
 }
 
-.episode-toggle {
+.sidebar-toggle {
   width: 24px;
   height: 24px;
   display: flex;
@@ -1317,34 +1330,151 @@ onUnmounted(() => {
   transition: background 0.15s, color 0.15s;
 }
 
-.episode-toggle:hover {
+.sidebar-toggle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
-.episode-list {
+/* UP主信息 */
+.info-up {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px;
+  flex-shrink: 0;
+}
+
+.info-up-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.info-up-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 视频标题 */
+.info-title {
+  padding: 0 14px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* 统计数据 */
+.info-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+}
+
+.info-stat {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* 简介 */
+.info-desc-section {
+  padding: 0 14px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.info-desc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 6px;
+}
+
+.info-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.info-desc::-webkit-scrollbar {
+  width: 3px;
+}
+
+.info-desc::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.info-desc::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.info-desc-at {
+  color: #00a1d6;
+  text-decoration: none;
+}
+
+.info-desc-at:hover {
+  text-decoration: underline;
+}
+
+/* 分集列表 */
+.info-episodes {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.info-ep-label {
+  padding: 0 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+}
+
+.info-ep-list {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  padding: 0 6px 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.episode-list::-webkit-scrollbar {
+.info-ep-list::-webkit-scrollbar {
   width: 4px;
 }
 
-.episode-list::-webkit-scrollbar-track {
+.info-ep-list::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.episode-list::-webkit-scrollbar-thumb {
+.info-ep-list::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 2px;
 }
 
-.episode-item {
+.info-ep-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1359,17 +1489,17 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.episode-item:hover {
+.info-ep-item:hover {
   background: rgba(255, 255, 255, 0.07);
   color: #fff;
 }
 
-.episode-item.active {
+.info-ep-item.active {
   background: rgba(0, 161, 214, 0.2);
   color: #00a1d6;
 }
 
-.episode-index {
+.info-ep-index {
   font-size: 11px;
   font-weight: 600;
   color: inherit;
@@ -1379,7 +1509,7 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.episode-name {
+.info-ep-name {
   flex: 1;
   font-size: 12px;
   overflow: hidden;
@@ -1387,7 +1517,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.episode-dur {
+.info-ep-dur {
   font-size: 11px;
   opacity: 0.45;
   flex-shrink: 0;
