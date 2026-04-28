@@ -521,7 +521,7 @@ async function playVideo(video) {
   playerWindowId = openWindow({
     title: cleanTitle(video.title),
     icon: '📺',
-    width: 1050,
+    width: 1000,
     height: 650,
     component: markRaw(BilibiliPlayer),
     props: {
