@@ -54,7 +54,14 @@ const qrStatus = ref(null)  // 'loading' | 'waiting' | 'scanned' | 'expired' | n
 let qrPollTimer = null
 
 // 页面切换
-const activeTab = ref('search') // 'search' | 'history' | 'toview'
+const activeTab = ref('recommend') // 'recommend' | 'search' | 'history' | 'toview'
+
+// 推荐状态
+const recommendData = ref([])
+const recommendLoading = ref(false)
+const recommendInited = ref(false)
+const recommendPage = ref(1)
+const recommendFreshIdx = ref(1)
 
 // 历史记录状态（累积式分页，与搜索一致）
 const allHistoryResults = ref([])
@@ -271,11 +278,75 @@ function onSearchKeydown(e) {
   if (e.key === 'Enter') search()
 }
 
+// 推荐分页
+const recommendPagedData = computed(() => {
+  const start = (recommendPage.value - 1) * pageSize.value
+  return recommendData.value.slice(start, start + pageSize.value)
+})
+
+const recommendTotalPages = computed(() => Math.max(1, Math.ceil(recommendData.value.length / pageSize.value)))
+
+// 获取推荐列表
+async function fetchRecommend() {
+  recommendLoading.value = true
+  try {
+    const res = await authFetch(`/api/bilibili/recommend?fresh_idx=${recommendFreshIdx.value}&ps=30`)
+    const data = await res.json()
+    if (data.code === 0 && data.data?.item) {
+      // 过滤出普通视频（排除直播、OGV等）
+      const videos = data.data.item.filter(item => item.goto === 'av')
+      recommendData.value = [...recommendData.value, ...videos]
+      recommendFreshIdx.value++
+      recommendInited.value = true
+    } else if (data.code === -101) {
+      recommendInited.value = true
+    }
+  } catch (e) {
+    console.error('Fetch recommend error:', e)
+  }
+  recommendLoading.value = false
+}
+
+// 推荐加载更多页
+async function recommendLoadMore() {
+  if (recommendLoading.value) return
+  await fetchRecommend()
+}
+
+// 将推荐项转为播放所需格式
+function recommendToVideo(item) {
+  return {
+    bvid: item.bvid || '',
+    aid: item.id || 0,
+    title: item.title || '',
+    author: item.owner?.name || '',
+    pic: item.pic || '',
+    play: item.stat?.view || 0,
+    favorites: 0,
+    review: item.stat?.reply || 0,
+    pubdate: item.pubdate || 0,
+    duration: item.duration ? formatDurationFromSec(item.duration) : '',
+    cid: item.cid || 0,
+  }
+}
+
+// 推荐理由
+function getRcmdReason(item) {
+  if (!item.rcmd_reason) return ''
+  if (item.rcmd_reason.reason_type === 1) return '已关注'
+  if (item.rcmd_reason.reason_type === 3 && item.rcmd_reason.content) return item.rcmd_reason.content
+  return ''
+}
+
 // 切换页面
 function switchTab(tab) {
   if (activeTab.value === tab) return
   activeTab.value = tab
-  if (tab === 'history') {
+  if (tab === 'recommend') {
+    if (!recommendInited.value) {
+      fetchRecommend()
+    }
+  } else if (tab === 'history') {
     allHistoryResults.value = []
     historyTotal.value = 0
     historyLocalPage.value = 1
@@ -465,6 +536,7 @@ async function playVideo(video) {
 
 onMounted(() => {
   checkLoginStatus()
+  fetchRecommend()
   nextTick(() => {
     if (resultsRef.value) {
       resultsHeight.value = resultsRef.value.getBoundingClientRect().height
@@ -525,6 +597,10 @@ onUnmounted(() => {
 
     <!-- 页面切换标签 -->
     <div class="tab-bar">
+      <button class="tab-item" :class="{ active: activeTab === 'recommend' }" @click="switchTab('recommend')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        推荐
+      </button>
       <button class="tab-item" :class="{ active: activeTab === 'search' }" @click="switchTab('search')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         搜索
@@ -564,6 +640,70 @@ onUnmounted(() => {
 
     <!-- 内容区域（统一容器，ResizeObserver 监听此元素） -->
     <div ref="resultsRef" class="results-wrapper">
+    <!-- 推荐 -->
+    <div v-if="activeTab === 'recommend'">
+      <div v-if="recommendLoading && !recommendInited" class="loading">加载中...</div>
+
+      <template v-else-if="!recommendLoading && recommendPagedData.length">
+        <div class="result-list">
+          <div
+            v-for="item in recommendPagedData"
+            :key="item.bvid"
+            class="video-card"
+            :class="{ active: currentBvid === item.bvid }"
+            @click="playVideo(recommendToVideo(item))"
+          >
+            <div class="video-cover-wrap">
+              <img
+                v-if="item.pic"
+                :src="proxyImg(item.pic)"
+                class="video-cover"
+                loading="lazy"
+              />
+              <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+            </div>
+            <div class="video-info">
+              <div class="video-title">{{ cleanTitle(item.title) }}</div>
+              <div v-if="getRcmdReason(item)" class="rcmd-reason">{{ getRcmdReason(item) }}</div>
+              <div class="video-meta">
+                <span v-if="item.owner?.name" class="video-author">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  {{ item.owner.name }}
+                </span>
+              </div>
+              <div class="video-stats">
+                <span class="stat-item">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  {{ formatCount(item.stat?.view) }}
+                </span>
+                <span class="stat-item">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  {{ formatCount(item.stat?.danmaku) }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="recommendTotalPages > 1" class="pagination">
+          <button class="page-btn" :disabled="recommendPage <= 1" @click="recommendPage--">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="page-info">{{ recommendPage }} / {{ recommendTotalPages }}</span>
+          <button class="page-btn" :disabled="recommendPage >= recommendTotalPages" @click="recommendPage++">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button class="page-btn load-more-btn" :disabled="recommendLoading" @click="recommendLoadMore()" title="加载更多推荐">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+      </template>
+
+      <div v-else-if="!recommendLoading && recommendInited && !recommendData.length" class="empty-state">
+        <div class="empty-text">暂无推荐内容</div>
+      </div>
+    </div>
+
     <!-- 搜索结果 -->
     <div v-if="activeTab === 'search'">
       <div v-if="loading" class="loading">搜索中...</div>
@@ -1264,6 +1404,29 @@ onUnmounted(() => {
   background: rgba(0, 161, 214, 0.2);
   color: #00a1d6;
   border-radius: 4px;
+}
+
+/* 推荐理由 */
+.rcmd-reason {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(251, 114, 153, 0.15);
+  color: #fb7299;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+/* 加载更多按钮 */
+.load-more-btn {
+  margin-left: 4px;
+  background: rgba(0, 161, 214, 0.2);
+  border-color: rgba(0, 161, 214, 0.3);
+}
+
+.load-more-btn:hover:not(:disabled) {
+  background: rgba(0, 161, 214, 0.4);
+  color: #fff;
+  border-color: rgba(0, 161, 214, 0.5);
 }
 
 /* 观看进度条 */
