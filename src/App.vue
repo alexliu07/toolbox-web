@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, shallowRef, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
+import { ref, computed, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
 import { useWindowManager } from './composables/useWindowManager.js'

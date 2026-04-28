@@ -2,5 +2,8 @@ import './assets/main.css'
 
 import { createApp } from 'vue'
 import App from './App.vue'
+import { vIframeStorage } from './composables/iframeStorage.js'
 
-createApp(App).mount('#app')
+const app = createApp(App)
+app.directive('iframe-storage', vIframeStorage)
+app.mount('#app')

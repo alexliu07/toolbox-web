@@ -1,5 +1,5 @@
 <template>
-  <iframe
+  <iframe v-iframe-storage
     src="/wordle/index.html"
     class="wordle-frame"
     allow="fullscreen"

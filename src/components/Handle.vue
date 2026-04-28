@@ -1,5 +1,5 @@
 <template>
-  <iframe
+  <iframe v-iframe-storage
     src="/handle/index.html"
     class="handle-frame"
     allow="fullscreen"
