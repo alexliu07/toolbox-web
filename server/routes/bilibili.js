@@ -730,27 +730,18 @@ router.get('/history', optionalAuth, async (req, res) => {
 })
 
 // 获取首页视频推荐列表
-router.get('/recommend', async (req, res) => {
+router.get('/recommend', optionalAuth,async (req, res) => {
   try {
     await fetchWbiKeys()
     const { fresh_idx = '1', ps = '12' } = req.query
     const freshIdxNum = parseInt(fresh_idx)
     const psNum = parseInt(ps)
     const params = signWBI({
-      fresh_type: 4,
       ps: psNum,
       fresh_idx: freshIdxNum,
       fresh_idx_1h: freshIdxNum,
       brush: freshIdxNum,
       fetch_row: freshIdxNum * psNum,
-      web_location: 1430650,
-      y_num: 4,
-      last_y_num: 4,
-      feed_version: 'V8',
-      homepage_ver: 1,
-      screen: '1920-1080',
-      seo_info: '',
-      uniq_id: '',
     })
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd', params, cookieStr ? { cookies: cookieStr } : {})
