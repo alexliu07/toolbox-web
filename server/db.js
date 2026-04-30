@@ -140,6 +140,18 @@ export async function initDatabase() {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_wallpapers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+
   // Save to disk
   saveDatabase()
 
@@ -470,6 +482,48 @@ export function removeUserLocalStorageItem(userId, key) {
 
 export function clearUserLocalStorage(userId) {
   db.run('DELETE FROM user_localstorage WHERE user_id = ?', [userId])
+  saveDatabase()
+}
+
+// ── Wallpapers operations ──
+
+export function addUserWallpaper(userId, fileName, filePath, fileSize) {
+  db.run(
+    'INSERT INTO user_wallpapers (user_id, file_name, file_path, file_size) VALUES (?, ?, ?, ?)',
+    [userId, fileName, filePath, fileSize]
+  )
+  saveDatabase()
+  const result = db.exec('SELECT last_insert_rowid() as id')
+  return result[0].values[0][0]
+}
+
+export function getUserWallpapers(userId) {
+  const results = db.exec(
+    'SELECT id, file_name, file_size, created_at FROM user_wallpapers WHERE user_id = ? ORDER BY created_at DESC',
+    [userId]
+  )
+  if (!results.length) return []
+  return results[0].values.map(row => ({
+    id: row[0],
+    file_name: row[1],
+    file_size: row[2],
+    created_at: row[3],
+  }))
+}
+
+export function getUserWallpaper(userId, id) {
+  const stmt = db.prepare('SELECT * FROM user_wallpapers WHERE user_id = ? AND id = ?')
+  stmt.bind([userId, id])
+  let wallpaper = null
+  if (stmt.step()) {
+    wallpaper = stmt.getAsObject()
+  }
+  stmt.free()
+  return wallpaper
+}
+
+export function deleteUserWallpaper(userId, id) {
+  db.run('DELETE FROM user_wallpapers WHERE user_id = ? AND id = ?', [userId, id])
   saveDatabase()
 }
 

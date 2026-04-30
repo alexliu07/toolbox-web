@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide } from 'vue'
+import { ref, computed, markRaw, defineAsyncComponent, onMounted, onUnmounted, provide, watch } from 'vue'
 import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
@@ -27,6 +27,31 @@ const {
   authToken, currentUser, isLoggedIn,
   checkAuth, handleLogout, authFetch,
 } = useAuth()
+
+// ── wallpaper ──
+const currentWallpaper = ref(null)
+
+async function loadWallpaper() {
+  if (!authToken.value) return
+  try {
+    const res = await authFetch('/api/wallpaper/current')
+    if (res.ok) {
+      const data = await res.json()
+      currentWallpaper.value = data.current
+    }
+  } catch {}
+}
+
+// Expose refresh for child components
+window.__refreshWallpaper = loadWallpaper
+
+watch(isLoggedIn, (loggedIn) => {
+  if (loggedIn) {
+    loadWallpaper()
+  } else {
+    currentWallpaper.value = null
+  }
+})
 
 const now = ref(new Date())
 let timer = null
@@ -94,6 +119,8 @@ function openTool(tool) {
 // Provide auth token and auth-aware fetch to child components
 provide('authToken', authToken)
 provide('authFetch', authFetch)
+provide('currentWallpaper', currentWallpaper)
+provide('refreshWallpaper', loadWallpaper)
 
 // Provide window manager primitives to child components
 provide('openWindow', openWindow)
@@ -105,8 +132,7 @@ onMounted(async () => {
   timer = setInterval(() => { now.value = new Date() }, 60000)
   loadConfig()
   await checkAuth()
-
-
+  await loadWallpaper()
 })
 onUnmounted(() => clearInterval(timer))
 </script>
@@ -115,9 +141,15 @@ onUnmounted(() => clearInterval(timer))
   <div class="app">
     <!-- 动态背景 -->
     <div class="bg">
-      <div class="orb orb-1"></div>
-      <div class="orb orb-2"></div>
-      <div class="orb orb-3"></div>
+      <img
+        v-if="currentWallpaper"
+        :src="`/api/wallpaper/image/${currentWallpaper.id}?token=${authToken}`"
+        class="wallpaper-img"
+        alt=""
+      />
+      <div class="orb orb-1" :class="{ dimmed: currentWallpaper }"></div>
+      <div class="orb orb-2" :class="{ dimmed: currentWallpaper }"></div>
+      <div class="orb orb-3" :class="{ dimmed: currentWallpaper }"></div>
     </div>
 
     <!-- 登录/注册界面 -->
@@ -262,11 +294,25 @@ onUnmounted(() => clearInterval(timer))
   overflow: hidden;
 }
 
+.wallpaper-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
 .orb {
   position: absolute;
   border-radius: 50%;
   filter: blur(80px);
   opacity: 0.45;
+  transition: opacity 0.6s ease;
+}
+
+.orb.dimmed {
+  opacity: 0.12;
 }
 
 .orb-1 {

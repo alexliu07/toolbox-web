@@ -57,6 +57,10 @@ server/desmos-saves/*
 server/drawings/*
 !server/drawings/.gitkeep
 
+# wallpaper uploads
+server/wallpapers/*
+!server/wallpapers/.gitkeep
+
 # shared folders config (personal paths)
 server/shared-folders.json
 
