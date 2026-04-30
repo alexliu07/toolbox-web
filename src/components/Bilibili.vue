@@ -962,9 +962,6 @@ onUnmounted(() => {
               <div v-if="item.progress != null && item.duration" class="video-progress-bar">
                 <div class="video-progress-fill" :style="{ width: formatProgress(item.progress, item.duration) + '%' }"></div>
               </div>
-              <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(item.history?.oid, $event)" title="添加到稍后再看">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              </button>
             </div>
             <div class="video-info">
               <div class="video-title">{{ cleanTitle(item.title) }}</div>
@@ -1154,9 +1151,6 @@ onUnmounted(() => {
                   loading="lazy"
                 />
                 <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
-                <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(item.id, $event)" title="添加到稍后再看">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                </button>
               </div>
               <div class="video-info">
                 <div class="video-title">{{ cleanTitle(item.title) }}</div>
