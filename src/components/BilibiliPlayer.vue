@@ -31,11 +31,6 @@ const infoCollapsed = ref(false)
 const videoInfo = ref(null)
 
 // 互动状态
-const liked = ref(false)
-const coinCount = ref(0)
-const favCount = ref(0)
-const isLiked = ref(false)
-const isCoined = ref(0)
 const isFaved = ref(false)
 const actionLoading = ref(false)
 
@@ -92,73 +87,11 @@ async function fetchVideoInfo() {
 
 async function fetchActionStatus() {
   try {
-    const [likeRes, coinRes, favRes] = await Promise.all([
-      authFetch(`/api/bilibili/like/status?bvid=${encodeURIComponent(props.bvid)}`).then(r => r.json()),
-      authFetch(`/api/bilibili/coin/status?bvid=${encodeURIComponent(props.bvid)}`).then(r => r.json()),
-      authFetch(`/api/bilibili/fav/status?aid=${props.aid}`).then(r => r.json()),
-    ])
-    if (likeRes.code === 0) isLiked.value = likeRes.data === 1
-    if (coinRes.code === 0) isCoined.value = coinRes.data?.multiply || 0
-    if (favRes.code === 0) isFaved.value = favRes.data?.favoured || false
-    liked.value = isLiked.value
-    favCount.value = videoInfo.value?.stat?.favorite || 0
+    const res = await authFetch(`/api/bilibili/fav/status?aid=${props.aid}`)
+    const data = await res.json()
+    if (data.code === 0) isFaved.value = data.data?.favoured || false
   } catch (e) {
     console.warn('Failed to fetch action status:', e)
-  }
-}
-
-async function toggleLike() {
-  if (actionLoading.value) return
-  actionLoading.value = true
-  try {
-    const likeVal = isLiked.value ? 2 : 1
-    const res = await authFetch('/api/bilibili/like', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bvid: props.bvid, like: likeVal })
-    })
-    const data = await res.json()
-    if (data.code === 0) {
-      isLiked.value = !isLiked.value
-    } else {
-      alert(data.message || '操作失败')
-    }
-  } catch (e) {
-    console.error('Like error:', e)
-  }
-  actionLoading.value = false
-}
-
-async function addCoin(multiply) {
-  if (actionLoading.value) return
-  actionLoading.value = true
-  try {
-    const res = await authFetch('/api/bilibili/coin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bvid: props.bvid, multiply, select_like: isLiked.value ? 0 : 1 })
-    })
-    const data = await res.json()
-    if (data.code === 0) {
-      isCoined.value = Math.min(2, isCoined.value + multiply)
-      if (data.data?.like) isLiked.value = true
-    } else {
-      alert(data.message || '投币失败')
-    }
-  } catch (e) {
-    console.error('Coin error:', e)
-  }
-  actionLoading.value = false
-}
-
-function showCoinOptions() {
-  if (isCoined.value >= 2) return
-  const remaining = 2 - isCoined.value
-  if (remaining === 1) {
-    addCoin(1)
-  } else {
-    const choice = confirm('投2枚币？\n\n确定 = 2枚\n取消 = 1枚')
-    addCoin(choice ? 2 : 1)
   }
 }
 
@@ -453,14 +386,6 @@ onUnmounted(() => {
           </div>
           <!-- 互动按钮 -->
           <div class="info-actions">
-            <button class="action-btn" :class="{ active: isLiked }" :disabled="actionLoading" @click="toggleLike()">
-              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isLiked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-              <span>{{ isLiked ? '已点赞' : '点赞' }}</span>
-            </button>
-            <button class="action-btn" :class="{ active: isCoined > 0 }" :disabled="actionLoading || isCoined >= 2" @click="showCoinOptions()">
-              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isCoined > 0 ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M14.5 9a3.5 2 0 0 0-5 0v6a3.5 2 0 0 0 5 0"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-              <span>{{ isCoined > 0 ? `已投币(${isCoined})` : '投币' }}</span>
-            </button>
             <button class="action-btn" :class="{ active: isFaved }" :disabled="actionLoading" @click="openFavModal()">
               <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
               <span>{{ isFaved ? '已收藏' : '收藏' }}</span>
