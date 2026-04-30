@@ -30,6 +30,21 @@ const pendingSeekTime = ref(null)
 const infoCollapsed = ref(false)
 const videoInfo = ref(null)
 
+// 互动状态
+const liked = ref(false)
+const coinCount = ref(0)
+const favCount = ref(0)
+const isLiked = ref(false)
+const isCoined = ref(0)
+const isFaved = ref(false)
+const actionLoading = ref(false)
+
+// 收藏夹弹窗
+const showFavModal = ref(false)
+const favFolders = ref([])
+const favFoldersLoading = ref(false)
+const selectedFolderIds = ref(new Set())
+
 // ── 格式化 ──
 function formatCount(num) {
   if (!num && num !== 0) return '0'
@@ -73,6 +88,129 @@ async function fetchVideoInfo() {
   } catch (e) {
     console.warn('Failed to fetch video info:', e)
   }
+}
+
+async function fetchActionStatus() {
+  try {
+    const [likeRes, coinRes, favRes] = await Promise.all([
+      authFetch(`/api/bilibili/like/status?bvid=${encodeURIComponent(props.bvid)}`).then(r => r.json()),
+      authFetch(`/api/bilibili/coin/status?bvid=${encodeURIComponent(props.bvid)}`).then(r => r.json()),
+      authFetch(`/api/bilibili/fav/status?aid=${props.aid}`).then(r => r.json()),
+    ])
+    if (likeRes.code === 0) isLiked.value = likeRes.data === 1
+    if (coinRes.code === 0) isCoined.value = coinRes.data?.multiply || 0
+    if (favRes.code === 0) isFaved.value = favRes.data?.favoured || false
+    liked.value = isLiked.value
+    favCount.value = videoInfo.value?.stat?.favorite || 0
+  } catch (e) {
+    console.warn('Failed to fetch action status:', e)
+  }
+}
+
+async function toggleLike() {
+  if (actionLoading.value) return
+  actionLoading.value = true
+  try {
+    const likeVal = isLiked.value ? 2 : 1
+    const res = await authFetch('/api/bilibili/like', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvid: props.bvid, like: likeVal })
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      isLiked.value = !isLiked.value
+    } else {
+      alert(data.message || '操作失败')
+    }
+  } catch (e) {
+    console.error('Like error:', e)
+  }
+  actionLoading.value = false
+}
+
+async function addCoin(multiply) {
+  if (actionLoading.value) return
+  actionLoading.value = true
+  try {
+    const res = await authFetch('/api/bilibili/coin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvid: props.bvid, multiply, select_like: isLiked.value ? 0 : 1 })
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      isCoined.value = Math.min(2, isCoined.value + multiply)
+      if (data.data?.like) isLiked.value = true
+    } else {
+      alert(data.message || '投币失败')
+    }
+  } catch (e) {
+    console.error('Coin error:', e)
+  }
+  actionLoading.value = false
+}
+
+function showCoinOptions() {
+  if (isCoined.value >= 2) return
+  const remaining = 2 - isCoined.value
+  if (remaining === 1) {
+    addCoin(1)
+  } else {
+    const choice = confirm('投2枚币？\n\n确定 = 2枚\n取消 = 1枚')
+    addCoin(choice ? 2 : 1)
+  }
+}
+
+async function openFavModal() {
+  showFavModal.value = true
+  favFoldersLoading.value = true
+  selectedFolderIds.value = new Set()
+  try {
+    const res = await authFetch('/api/bilibili/favorites')
+    const data = await res.json()
+    if (data.code === 0 && data.data?.list) {
+      favFolders.value = data.data.list
+    }
+  } catch (e) {
+    console.error('Fetch folders error:', e)
+  }
+  favFoldersLoading.value = false
+}
+
+function toggleFolderSelection(id) {
+  const s = new Set(selectedFolderIds.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  selectedFolderIds.value = s
+}
+
+async function confirmFav() {
+  if (selectedFolderIds.value.size === 0) return
+  actionLoading.value = true
+  try {
+    const res = await authFetch('/api/bilibili/fav', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rid: props.aid, add_media_ids: Array.from(selectedFolderIds.value).join(',') })
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      isFaved.value = true
+      showFavModal.value = false
+    } else {
+      alert(data.message || '收藏失败')
+    }
+  } catch (e) {
+    console.error('Fav error:', e)
+  }
+  actionLoading.value = false
+}
+
+function closeFavModal() {
+  showFavModal.value = false
+  favFolders.value = []
+  selectedFolderIds.value = new Set()
 }
 
 async function fetchStreamUrl() {
@@ -260,6 +398,7 @@ function reportProgress() {
 // ── 生命周期 ──
 onMounted(async () => {
   fetchVideoInfo()
+  fetchActionStatus()
   await fetchStreamUrl()
 })
 
@@ -310,6 +449,53 @@ onUnmounted(() => {
                 </template>
               </template>
               <template v-else>{{ videoInfo?.desc }}</template>
+            </div>
+          </div>
+          <!-- 互动按钮 -->
+          <div class="info-actions">
+            <button class="action-btn" :class="{ active: isLiked }" :disabled="actionLoading" @click="toggleLike()">
+              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isLiked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+              <span>{{ isLiked ? '已点赞' : '点赞' }}</span>
+            </button>
+            <button class="action-btn" :class="{ active: isCoined > 0 }" :disabled="actionLoading || isCoined >= 2" @click="showCoinOptions()">
+              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isCoined > 0 ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M14.5 9a3.5 2 0 0 0-5 0v6a3.5 2 0 0 0 5 0"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              <span>{{ isCoined > 0 ? `已投币(${isCoined})` : '投币' }}</span>
+            </button>
+            <button class="action-btn" :class="{ active: isFaved }" :disabled="actionLoading" @click="openFavModal()">
+              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              <span>{{ isFaved ? '已收藏' : '收藏' }}</span>
+            </button>
+          </div>
+          <!-- 收藏夹选择弹窗 -->
+          <div v-if="showFavModal" class="fav-modal-overlay" @click.self="closeFavModal()">
+            <div class="fav-modal">
+              <div class="fav-modal-header">
+                <span class="fav-modal-title">选择收藏夹</span>
+                <button class="fav-modal-close" @click="closeFavModal()">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <div v-if="favFoldersLoading" class="fav-modal-loading">加载中...</div>
+              <div v-else class="fav-modal-list">
+                <div
+                  v-for="folder in favFolders"
+                  :key="folder.id"
+                  class="fav-folder-item"
+                  :class="{ selected: selectedFolderIds.has(folder.id) }"
+                  @click="toggleFolderSelection(folder.id)"
+                >
+                  <div class="fav-folder-check">
+                    <svg v-if="selectedFolderIds.has(folder.id)" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <span class="fav-folder-name">{{ folder.title }}</span>
+                  <span class="fav-folder-count">{{ folder.media_count }}</span>
+                </div>
+              </div>
+              <div class="fav-modal-footer">
+                <button class="fav-modal-confirm" :disabled="selectedFolderIds.size === 0 || actionLoading" @click="confirmFav()">
+                  确认收藏 ({{ selectedFolderIds.size }})
+                </button>
+              </div>
             </div>
           </div>
           <div v-if="pageList.length > 1" class="info-episodes">
@@ -609,4 +795,197 @@ onUnmounted(() => {
 :deep(.quantity_item) { padding: 5px 20px; font-weight: normal; }
 :deep(.quantity_item:hover) { background: rgba(255, 255, 255, 0.3); }
 :deep(.quantity_item-active) { color: var(--theme-color); }
+
+/* 互动按钮 */
+.info-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.action-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.action-btn.active {
+  background: rgba(0, 161, 214, 0.15);
+  border-color: rgba(0, 161, 214, 0.3);
+  color: #00a1d6;
+}
+
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 收藏夹弹窗 */
+.fav-modal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fav-modal {
+  width: 280px;
+  max-height: 360px;
+  background: rgba(20, 22, 35, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.fav-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.fav-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.fav-modal-close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+
+.fav-modal-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.fav-modal-loading {
+  padding: 24px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
+.fav-modal-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.fav-modal-list::-webkit-scrollbar { width: 4px; }
+.fav-modal-list::-webkit-scrollbar-track { background: transparent; }
+.fav-modal-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 2px; }
+
+.fav-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.fav-folder-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fav-folder-item.selected {
+  background: rgba(0, 161, 214, 0.12);
+}
+
+.fav-folder-check {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  flex-shrink: 0;
+  color: #00a1d6;
+  transition: border-color 0.12s;
+}
+
+.fav-folder-item.selected .fav-folder-check {
+  border-color: #00a1d6;
+  background: rgba(0, 161, 214, 0.15);
+}
+
+.fav-folder-name {
+  flex: 1;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-folder-count {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.fav-modal-footer {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.fav-modal-confirm {
+  width: 100%;
+  padding: 8px;
+  background: rgba(0, 161, 214, 0.6);
+  border: 1px solid rgba(0, 161, 214, 0.4);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.fav-modal-confirm:hover:not(:disabled) {
+  background: rgba(0, 161, 214, 0.8);
+}
+
+.fav-modal-confirm:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 </style>
