@@ -768,6 +768,28 @@ router.get('/toview', optionalAuth, async (req, res) => {
   }
 })
 
+// 添加稍后再看
+router.post('/toview/add', optionalAuth, async (req, res) => {
+  try {
+    const { aid } = req.body
+    if (!aid) return res.status(400).json({ code: -400, message: 'aid is required' })
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cred = getBilibiliCredentials(req.user?.id)
+    const csrf = cred?.cookies?.bili_jct || ''
+    const params = new URLSearchParams({ aid: String(aid), csrf })
+    const data = await fetchUrl('https://api.bilibili.com/x/v2/history/toview/add', {}, {
+      method: 'POST', cookies: cookieStr,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili toview add error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 // 获取用户收藏夹列表
 router.get('/favorites', optionalAuth, async (req, res) => {
   try {

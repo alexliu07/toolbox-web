@@ -611,6 +611,29 @@ function formatProgress(progress, duration) {
   return Math.min(100, Math.round((progress / duration) * 100))
 }
 
+// 添加稍后再看
+async function addToToview(aid, event) {
+  event.stopPropagation()
+  try {
+    const res = await authFetch('/api/bilibili/toview/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aid })
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      // 简单视觉反馈
+      const btn = event.currentTarget
+      btn.classList.add('toview-added')
+      setTimeout(() => btn.classList.remove('toview-added'), 1500)
+    } else {
+      alert(data.message || '添加失败')
+    }
+  } catch (e) {
+    console.error('Add to toview error:', e)
+  }
+}
+
 // 点击播放视频 — 在独立窗口中打开播放器
 async function playVideo(video) {
   // 同一视频 → 将已有窗口置顶
@@ -790,6 +813,9 @@ onUnmounted(() => {
                 loading="lazy"
               />
               <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+              <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(item.aid, $event)" title="添加到稍后再看">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </button>
             </div>
             <div class="video-info">
               <div class="video-title">{{ cleanTitle(item.title) }}</div>
@@ -854,6 +880,9 @@ onUnmounted(() => {
                 loading="lazy"
               />
               <div class="video-duration">{{ video.duration }}</div>
+              <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(video.aid, $event)" title="添加到稍后再看">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </button>
             </div>
             <div class="video-info">
               <div class="video-title">{{ cleanTitle(video.title) }}</div>
@@ -933,6 +962,9 @@ onUnmounted(() => {
               <div v-if="item.progress != null && item.duration" class="video-progress-bar">
                 <div class="video-progress-fill" :style="{ width: formatProgress(item.progress, item.duration) + '%' }"></div>
               </div>
+              <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(item.history?.oid, $event)" title="添加到稍后再看">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </button>
             </div>
             <div class="video-info">
               <div class="video-title">{{ cleanTitle(item.title) }}</div>
@@ -1122,6 +1154,9 @@ onUnmounted(() => {
                   loading="lazy"
                 />
                 <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+                <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(item.id, $event)" title="添加到稍后再看">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </button>
               </div>
               <div class="video-info">
                 <div class="video-title">{{ cleanTitle(item.title) }}</div>
@@ -1304,6 +1339,39 @@ onUnmounted(() => {
   font-size: 11px;
   color: #fff;
   font-weight: 500;
+}
+
+.toview-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.video-card:hover .toview-btn {
+  opacity: 1;
+}
+
+.toview-btn:hover {
+  background: rgba(0, 161, 214, 0.8);
+  color: #fff;
+}
+
+.toview-btn.toview-added {
+  opacity: 1;
+  background: rgba(0, 161, 214, 0.9);
+  color: #fff;
 }
 
 .video-info {
