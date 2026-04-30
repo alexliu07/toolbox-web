@@ -768,6 +768,58 @@ router.get('/toview', optionalAuth, async (req, res) => {
   }
 })
 
+// 获取用户收藏夹列表
+router.get('/favorites', optionalAuth, async (req, res) => {
+  try {
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) {
+      return res.json({ code: -101, message: '账号未登录' })
+    }
+
+    // 先获取用户 mid
+    const navData = await fetchUrl('https://api.bilibili.com/x/web-interface/nav', {}, { cookies: cookieStr })
+    const mid = navData?.data?.mid
+    if (!mid) {
+      return res.json({ code: -101, message: '无法获取用户信息' })
+    }
+
+    const data = await fetchUrl('https://api.bilibili.com/x/v3/fav/folder/created/list-all', {
+      up_mid: mid,
+      type: 2,
+    }, { cookies: cookieStr })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili favorites error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 获取收藏夹内容列表
+router.get('/favorites/detail', optionalAuth, async (req, res) => {
+  try {
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) {
+      return res.json({ code: -101, message: '账号未登录' })
+    }
+
+    const { media_id, pn = 1, ps = 20 } = req.query
+    if (!media_id) {
+      return res.status(400).json({ code: -400, message: 'media_id is required' })
+    }
+
+    const data = await fetchUrl('https://api.bilibili.com/x/v3/fav/resource/list', {
+      media_id: parseInt(media_id),
+      pn: parseInt(pn),
+      ps: parseInt(ps),
+      platform: 'web',
+    }, { cookies: cookieStr })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili favorites detail error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 // 上报观看进度
 router.post('/report', optionalAuth, async (req, res) => {
   try {

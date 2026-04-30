@@ -86,6 +86,33 @@ const toviewLoading = ref(false)
 const toviewInited = ref(false)
 const toviewPage = ref(1)
 
+// 收藏夹状态
+const favoritesInited = ref(false)
+const favoritesActiveView = ref('list') // 'list' | 'detail'
+const favoritesData = ref([])
+const favoritesLoading = ref(false)
+const favoritesPage = ref(1)
+
+const currentFolder = ref(null) // { id, title, media_count }
+const favoritesDetailData = ref([])
+const favoritesDetailLoading = ref(false)
+const favoritesDetailPage = ref(1)
+const favoritesDetailHasMore = ref(true)
+
+const favoritesPagedData = computed(() => {
+  const start = (favoritesPage.value - 1) * pageSize.value
+  return favoritesData.value.slice(start, start + pageSize.value)
+})
+
+const favoritesTotalPages = computed(() => Math.max(1, Math.ceil(favoritesData.value.length / pageSize.value)))
+
+const favoritesDetailPagedData = computed(() => {
+  const start = (favoritesDetailPage.value - 1) * pageSize.value
+  return favoritesDetailData.value.slice(start, start + pageSize.value)
+})
+
+const favoritesDetailTotalPages = computed(() => Math.max(1, Math.ceil(favoritesDetailData.value.length / pageSize.value)))
+
 // 格式化数字
 function formatCount(num) {
   if (!num && num !== 0) return '0'
@@ -356,6 +383,12 @@ function switchTab(tab) {
   } else if (tab === 'toview') {
     toviewPage.value = 1
     fetchToview()
+  } else if (tab === 'favorites') {
+    favoritesActiveView.value = 'list'
+    currentFolder.value = null
+    if (!favoritesInited.value) {
+      fetchFavorites()
+    }
   }
 }
 
@@ -467,6 +500,95 @@ function toviewToVideo(item) {
     pubdate: item.pubdate || 0,
     duration: item.duration ? formatDurationFromSec(item.duration) : '',
     cid: item.cid || 0,
+  }
+}
+
+// 获取收藏夹列表
+async function fetchFavorites() {
+  favoritesLoading.value = true
+  try {
+    const res = await authFetch('/api/bilibili/favorites')
+    const data = await res.json()
+    if (data.code === 0 && data.data?.list) {
+      favoritesData.value = data.data.list
+      favoritesInited.value = true
+    } else if (data.code === -101) {
+      favoritesData.value = []
+      favoritesInited.value = true
+    }
+  } catch (e) {
+    console.error('Fetch favorites error:', e)
+  }
+  favoritesLoading.value = false
+}
+
+// 打开收藏夹详情
+async function openFolder(folder) {
+  currentFolder.value = { id: folder.id, title: folder.title, media_count: folder.media_count }
+  favoritesActiveView.value = 'detail'
+  favoritesDetailData.value = []
+  favoritesDetailPage.value = 1
+  favoritesDetailHasMore.value = true
+  await fetchFavoritesDetail()
+}
+
+// 返回收藏夹列表
+function backToFavoritesList() {
+  favoritesActiveView.value = 'list'
+  currentFolder.value = null
+  favoritesDetailData.value = []
+}
+
+// 获取收藏夹内容
+async function fetchFavoritesDetail() {
+  if (!currentFolder.value) return
+  favoritesDetailLoading.value = true
+  try {
+    const pn = Math.ceil(favoritesDetailData.value.length / 20) + 1
+    const res = await authFetch(`/api/bilibili/favorites/detail?media_id=${currentFolder.value.id}&pn=${pn}&ps=20`)
+    const data = await res.json()
+    if (data.code === 0 && data.data?.medias) {
+      const videos = data.data.medias.filter(m => m.type === 2 && m.attr === 0)
+      favoritesDetailData.value = [...favoritesDetailData.value, ...videos]
+      favoritesDetailHasMore.value = !!data.data.has_more
+    }
+  } catch (e) {
+    console.error('Fetch favorites detail error:', e)
+  }
+  favoritesDetailLoading.value = false
+}
+
+// 收藏夹视频加载更多
+async function favoritesDetailLoadMore() {
+  if (favoritesDetailLoading.value || !favoritesDetailHasMore.value) return
+  await fetchFavoritesDetail()
+}
+
+async function favoritesDetailGoToPage(page) {
+  if (page < 1 || page > favoritesDetailTotalPages.value) return
+  const needed = page * pageSize.value
+  while (favoritesDetailData.value.length < needed && favoritesDetailHasMore.value) {
+    const prevLen = favoritesDetailData.value.length
+    await fetchFavoritesDetail()
+    if (favoritesDetailData.value.length === prevLen) break
+  }
+  favoritesDetailPage.value = page
+}
+
+// 将收藏夹视频项转为播放所需格式
+function favoritesToVideo(item) {
+  return {
+    bvid: item.bvid || '',
+    aid: item.id || 0,
+    title: item.title || '',
+    author: item.upper?.name || '',
+    pic: item.cover || '',
+    play: item.cnt_info?.play || 0,
+    favorites: item.cnt_info?.collect || 0,
+    review: 0,
+    pubdate: item.pubtime || 0,
+    duration: item.duration ? formatDurationFromSec(item.duration) : '',
+    cid: 0,
   }
 }
 
@@ -612,6 +734,10 @@ onUnmounted(() => {
       <button v-if="bilibiliUser" class="tab-item" :class="{ active: activeTab === 'toview' }" @click="switchTab('toview')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         稍后再看
+      </button>
+      <button v-if="bilibiliUser" class="tab-item" :class="{ active: activeTab === 'favorites' }" @click="switchTab('favorites')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        收藏夹
       </button>
       <div class="tab-spacer"></div>
       <button v-if="!bilibiliUser" class="login-btn" @click="startLogin()" title="登录哔哩哔哩">
@@ -903,6 +1029,139 @@ onUnmounted(() => {
         <div class="empty-icon">📋</div>
         <div class="empty-text">稍后再看列表为空</div>
       </div>
+    </div>
+
+    <!-- 收藏夹 -->
+    <div v-if="activeTab === 'favorites'">
+      <div v-if="!bilibiliUser" class="empty-state">
+        <div class="empty-icon">🔒</div>
+        <div class="empty-text">请先登录查看收藏夹</div>
+        <button class="login-prompt-btn" @click="startLogin()">登录</button>
+      </div>
+
+      <!-- 收藏夹列表 -->
+      <template v-else-if="favoritesActiveView === 'list'">
+        <div v-if="favoritesLoading" class="loading">加载中...</div>
+
+        <template v-else-if="!favoritesLoading && favoritesPagedData.length">
+          <div class="result-list">
+            <div
+              v-for="folder in favoritesPagedData"
+              :key="folder.id"
+              class="video-card folder-card"
+              @click="openFolder(folder)"
+            >
+              <div class="video-cover-wrap">
+                <img
+                  v-if="folder.cover"
+                  :src="proxyImg(folder.cover)"
+                  class="video-cover"
+                  loading="lazy"
+                />
+                <div v-else class="folder-cover-placeholder">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </div>
+                <div class="folder-count-badge">{{ folder.media_count }}个视频</div>
+              </div>
+              <div class="video-info">
+                <div class="video-title">{{ folder.title }}</div>
+                <div class="video-meta">
+                  <span v-if="folder.attr & 1" class="folder-private-badge">私密</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="favoritesTotalPages > 1" class="pagination">
+            <button class="page-btn" :disabled="favoritesPage <= 1" @click="favoritesPage--">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="page-info">{{ favoritesPage }} / {{ favoritesTotalPages }}</span>
+            <button class="page-btn" :disabled="favoritesPage >= favoritesTotalPages" @click="favoritesPage++">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </template>
+
+        <div v-else-if="!favoritesLoading && favoritesInited && !favoritesData.length" class="empty-state">
+          <div class="empty-icon">📂</div>
+          <div class="empty-text">暂无收藏夹</div>
+        </div>
+      </template>
+
+      <!-- 收藏夹详情 -->
+      <template v-else-if="favoritesActiveView === 'detail'">
+        <div class="favorites-detail-header">
+          <button class="back-btn" @click="backToFavoritesList()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            返回
+          </button>
+          <span class="favorites-detail-title">{{ currentFolder?.title }}</span>
+          <span class="favorites-detail-count">{{ currentFolder?.media_count }}个视频</span>
+        </div>
+
+        <div v-if="favoritesDetailLoading && !favoritesDetailData.length" class="loading">加载中...</div>
+
+        <template v-else-if="favoritesDetailPagedData.length">
+          <div class="result-list">
+            <div
+              v-for="item in favoritesDetailPagedData"
+              :key="item.id"
+              class="video-card"
+              :class="{ active: currentBvid === item.bvid }"
+              @click="playVideo(favoritesToVideo(item))"
+            >
+              <div class="video-cover-wrap">
+                <img
+                  v-if="item.cover"
+                  :src="proxyImg(item.cover)"
+                  class="video-cover"
+                  loading="lazy"
+                />
+                <div class="video-duration">{{ item.duration ? formatDurationFromSec(item.duration) : '' }}</div>
+              </div>
+              <div class="video-info">
+                <div class="video-title">{{ cleanTitle(item.title) }}</div>
+                <div class="video-meta">
+                  <span v-if="item.upper?.name" class="video-author">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    {{ item.upper.name }}
+                  </span>
+                </div>
+                <div class="video-stats">
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    {{ formatCount(item.cnt_info?.play) }}
+                  </span>
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    {{ formatCount(item.cnt_info?.danmaku) }}
+                  </span>
+                  <span class="video-date">{{ formatDate(item.fav_time) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pagination">
+            <button class="page-btn" :disabled="favoritesDetailPage <= 1 || favoritesDetailLoading" @click="favoritesDetailGoToPage(favoritesDetailPage - 1)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="page-info">{{ favoritesDetailPage }} / {{ favoritesDetailTotalPages }}</span>
+            <button class="page-btn" :disabled="favoritesDetailPage >= favoritesDetailTotalPages || favoritesDetailLoading" @click="favoritesDetailGoToPage(favoritesDetailPage + 1)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button v-if="favoritesDetailHasMore" class="page-btn load-more-btn" :disabled="favoritesDetailLoading" @click="favoritesDetailLoadMore()" title="加载更多">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+          </div>
+        </template>
+
+        <div v-else-if="!favoritesDetailLoading && !favoritesDetailData.length" class="empty-state">
+          <div class="empty-icon">📂</div>
+          <div class="empty-text">收藏夹为空</div>
+        </div>
+      </template>
     </div>
     </div>
   </div>
@@ -1473,5 +1732,80 @@ onUnmounted(() => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* 收藏夹文件夹卡片 */
+.folder-card .video-cover-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.folder-cover-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.folder-count-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 4px;
+  font-size: 11px;
+  color: #fff;
+  font-weight: 500;
+}
+
+.folder-private-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(251, 114, 153, 0.15);
+  color: #fb7299;
+  border-radius: 4px;
+}
+
+/* 收藏夹详情头部 */
+.favorites-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.favorites-detail-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.favorites-detail-count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
 }
 </style>
