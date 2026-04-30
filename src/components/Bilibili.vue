@@ -18,11 +18,13 @@ function isPlayerWindowOpen() {
 const CARD_HEIGHT = 112
 const CARD_GAP = 8
 const PAGINATION_HEIGHT = 40
+const DETAIL_HEADER_HEIGHT = 46 // 返回按钮+标题行高度(margin+padding+border)
 
 // 结果区域高度 → 动态 pageSize
 const resultsRef = ref(null)
 const resultsHeight = ref(400)
 const pageSize = computed(() => Math.max(1, Math.floor((resultsHeight.value - PAGINATION_HEIGHT) / (CARD_HEIGHT + CARD_GAP))))
+const detailPageSize = computed(() => Math.max(1, Math.floor((resultsHeight.value - PAGINATION_HEIGHT - DETAIL_HEADER_HEIGHT) / (CARD_HEIGHT + CARD_GAP))))
 
 let resultsResizeObserver = null
 
@@ -107,11 +109,11 @@ const favoritesPagedData = computed(() => {
 const favoritesTotalPages = computed(() => Math.max(1, Math.ceil(favoritesData.value.length / pageSize.value)))
 
 const favoritesDetailPagedData = computed(() => {
-  const start = (favoritesDetailPage.value - 1) * pageSize.value
-  return favoritesDetailData.value.slice(start, start + pageSize.value)
+  const start = (favoritesDetailPage.value - 1) * detailPageSize.value
+  return favoritesDetailData.value.slice(start, start + detailPageSize.value)
 })
 
-const favoritesDetailTotalPages = computed(() => Math.max(1, Math.ceil(favoritesDetailData.value.length / pageSize.value)))
+const favoritesDetailTotalPages = computed(() => Math.max(1, Math.ceil(favoritesDetailData.value.length / detailPageSize.value)))
 
 // 格式化数字
 function formatCount(num) {
@@ -566,7 +568,7 @@ async function favoritesDetailLoadMore() {
 
 async function favoritesDetailGoToPage(page) {
   if (page < 1 || page > favoritesDetailTotalPages.value) return
-  const needed = page * pageSize.value
+  const needed = page * detailPageSize.value
   while (favoritesDetailData.value.length < needed && favoritesDetailHasMore.value) {
     const prevLen = favoritesDetailData.value.length
     await fetchFavoritesDetail()
