@@ -654,6 +654,7 @@ async function playVideo(video) {
       title: video.title,
       pageList,
       initialCid: pageList[0].cid,
+      isLoggedIn: !!bilibiliUser.value,
     },
   })
 }

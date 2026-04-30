@@ -10,6 +10,7 @@ const props = defineProps({
   title: { type: String, default: '' },
   pageList: { type: Array, required: true },
   initialCid: { type: Number, default: 0 },
+  isLoggedIn: { type: Boolean, default: false },
 })
 
 const authFetch = inject('authFetch')
@@ -398,14 +399,14 @@ onUnmounted(() => {
             </div>
           </div>
           <!-- 互动按钮 -->
-          <div class="info-actions">
+          <div v-if="props.isLoggedIn" class="info-actions">
             <button class="action-btn" :class="{ active: isFaved }" :disabled="actionLoading" @click="openFavModal()">
               <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
               <span>{{ isFaved ? '已收藏' : '收藏' }}</span>
             </button>
           </div>
           <!-- 收藏夹选择弹窗 -->
-          <div v-if="showFavModal" class="fav-modal-overlay" @click.self="closeFavModal()">
+          <div v-if="props.isLoggedIn && showFavModal" class="fav-modal-overlay" @click.self="closeFavModal()">
             <div class="fav-modal">
               <div class="fav-modal-header">
                 <span class="fav-modal-title">选择收藏夹</span>
