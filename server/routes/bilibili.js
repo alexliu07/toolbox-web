@@ -783,10 +783,10 @@ router.get('/favorites', optionalAuth, async (req, res) => {
       return res.json({ code: -101, message: '无法获取用户信息' })
     }
 
-    const data = await fetchUrl('https://api.bilibili.com/x/v3/fav/folder/created/list-all', {
-      up_mid: mid,
-      type: 2,
-    }, { cookies: cookieStr })
+    const { rid } = req.query
+    const params = { up_mid: mid, type: 2 }
+    if (rid) params.rid = rid
+    const data = await fetchUrl('https://api.bilibili.com/x/v3/fav/folder/created/list-all', params, { cookies: cookieStr })
     res.json(data)
   } catch (e) {
     console.error('Bilibili favorites error:', e.message)

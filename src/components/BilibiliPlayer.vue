@@ -39,6 +39,7 @@ const showFavModal = ref(false)
 const favFolders = ref([])
 const favFoldersLoading = ref(false)
 const selectedFolderIds = ref(new Set())
+const originalFavIds = ref(new Set())
 
 // ── 格式化 ──
 function formatCount(num) {
@@ -99,11 +100,18 @@ async function openFavModal() {
   showFavModal.value = true
   favFoldersLoading.value = true
   selectedFolderIds.value = new Set()
+  originalFavIds.value = new Set()
   try {
-    const res = await authFetch('/api/bilibili/favorites')
+    const res = await authFetch(`/api/bilibili/favorites?rid=${props.aid}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
       favFolders.value = data.data.list
+      const preSelected = new Set()
+      for (const f of data.data.list) {
+        if (f.fav_state === 1) preSelected.add(f.id)
+      }
+      selectedFolderIds.value = preSelected
+      originalFavIds.value = new Set(preSelected)
     }
   } catch (e) {
     console.error('Fetch folders error:', e)
@@ -119,20 +127,25 @@ function toggleFolderSelection(id) {
 }
 
 async function confirmFav() {
-  if (selectedFolderIds.value.size === 0) return
   actionLoading.value = true
+  const addIds = Array.from(selectedFolderIds.value).filter(id => !originalFavIds.value.has(id))
+  const delIds = Array.from(originalFavIds.value).filter(id => !selectedFolderIds.value.has(id))
   try {
     const res = await authFetch('/api/bilibili/fav', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rid: props.aid, add_media_ids: Array.from(selectedFolderIds.value).join(',') })
+      body: JSON.stringify({
+        rid: props.aid,
+        add_media_ids: addIds.join(','),
+        del_media_ids: delIds.join(',')
+      })
     })
     const data = await res.json()
     if (data.code === 0) {
-      isFaved.value = true
+      isFaved.value = selectedFolderIds.value.size > 0
       showFavModal.value = false
     } else {
-      alert(data.message || '收藏失败')
+      alert(data.message || '操作失败')
     }
   } catch (e) {
     console.error('Fav error:', e)
@@ -417,8 +430,8 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="fav-modal-footer">
-                <button class="fav-modal-confirm" :disabled="selectedFolderIds.size === 0 || actionLoading" @click="confirmFav()">
-                  确认收藏 ({{ selectedFolderIds.size }})
+                <button class="fav-modal-confirm" :disabled="actionLoading" @click="confirmFav()">
+                  确认
                 </button>
               </div>
             </div>
