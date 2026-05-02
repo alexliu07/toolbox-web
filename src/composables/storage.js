@@ -1,22 +1,6 @@
 // src/polyfills/storage.js
-import {useAuth} from "@/composables/useAuth.js";
 
-const {isLoggedIn, authFetch} = useAuth()
-
-// 初始化时从后端加载localStorage数据
-let serverData = {}
-if (isLoggedIn) {
-    try {
-        const res = await authFetch('/api/localstorage')
-        if (res.ok) {
-            serverData = await res.json()
-        }
-    } catch (e) {
-        console.warn('Failed to load localStorage from server:', e)
-    }
-}
-
-const createServerStorage = (initialData) => {
+export const createServerStorage = (initialData) => {
     const store = { ...initialData };
     let length = Object.keys(store).length;
 
@@ -79,7 +63,7 @@ const createServerStorage = (initialData) => {
 
 export function injectStoragePolyfill(targetWindow) {
     const serverStorage = createServerStorage(serverData)
-
+    const trueLocalStorage = targetWindow.localStorage;
     try {
         targetWindow.Object.defineProperty(targetWindow, 'localStorage', {
             value: serverStorage,
@@ -90,6 +74,8 @@ export function injectStoragePolyfill(targetWindow) {
     } catch (e) {
         targetWindow.localStorage = serverStorage
     }
+
+    targetWindow.trueLocalStorage = trueLocalStorage
 
     return true // 已注入
 }

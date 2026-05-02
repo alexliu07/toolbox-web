@@ -4,6 +4,7 @@ import AppWindow            from './components/AppWindow.vue'
 import AuthScreen           from './components/AuthScreen.vue'
 import { useWindowManager } from './composables/useWindowManager.js'
 import { useAuth }          from './composables/useAuth.js'
+import { OverlaysProvider } from '@overlastic/vue'
 
 // 加载所有 .meta.js 纯数据文件（每个 ~100B，总量极小），组件按需加载
 const metaModules = import.meta.glob('./components/*.meta.js', { eager: true })
@@ -138,6 +139,7 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
+  <overlays-provider>
   <div class="app">
     <!-- 动态背景 -->
     <div class="bg">
@@ -233,6 +235,7 @@ onUnmounted(() => clearInterval(timer))
       />
     </AppWindow>
   </div>
+  </overlays-provider>
 </template>
 
 <style scoped>
