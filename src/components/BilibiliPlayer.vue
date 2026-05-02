@@ -3,14 +3,20 @@ import { ref, nextTick, inject, onMounted, onUnmounted, shallowRef } from 'vue'
 import NPlayer, { Popover } from 'nplayer'
 import Danmaku from '@nplayer/danmaku'
 import { MediaPlayer } from 'dashjs'
+import Hls from 'hls.js'
 
 const props = defineProps({
-  bvid: { type: String, required: true },
-  aid: { type: Number, required: true },
+  bvid: { type: String, default: '' },
+  aid: { type: Number, default: 0 },
   title: { type: String, default: '' },
-  pageList: { type: Array, required: true },
+  pageList: { type: Array, default: () => [] },
   initialCid: { type: Number, default: 0 },
   isLoggedIn: { type: Boolean, default: false },
+  isBangumi: { type: Boolean, default: false },
+  epId: { type: Number, default: 0 },
+  seasonId: { type: Number, default: 0 },
+  isLive: { type: Boolean, default: false },
+  roomId: { type: Number, default: 0 },
 })
 
 const authFetch = inject('authFetch')
@@ -19,6 +25,7 @@ const authFetch = inject('authFetch')
 const currentCid = ref(props.initialCid || (props.pageList[0]?.cid ?? 0))
 const currentPageIndex = ref(props.pageList.findIndex(p => p.cid === currentCid.value))
 if (currentPageIndex.value < 0) currentPageIndex.value = 0
+const currentEpId = ref(props.pageList[currentPageIndex.value]?.id || props.epId || 0)
 const streamUrl = ref('')
 const loadingStream = ref(true)
 const isPlaying = ref(false)
@@ -34,6 +41,15 @@ const videoInfo = ref(null)
 // 互动状态
 const isFaved = ref(false)
 const actionLoading = ref(false)
+
+// 番剧状态
+const bangumiInfo = ref(null)
+const isFollowed = ref(false)
+
+// 直播状态
+const liveInfo = ref(null)
+const anchorInfo = ref(null)
+let hlsInstance = null
 
 // 收藏夹弹窗
 const showFavModal = ref(false)
@@ -94,6 +110,56 @@ async function fetchActionStatus() {
     if (data.code === 0) isFaved.value = data.data?.favoured || false
   } catch (e) {
     console.warn('Failed to fetch action status:', e)
+  }
+}
+
+async function fetchBangumiInfo() {
+  if (!props.seasonId) return
+  try {
+    const res = await authFetch(`/api/bilibili/bangumi-info?season_id=${props.seasonId}`)
+    const data = await res.json()
+    if (data.code === 0) {
+      bangumiInfo.value = data.data
+      isFollowed.value = data.data.user_status?.follow === 1
+    }
+  } catch (e) {
+    console.warn('Failed to fetch bangumi info:', e)
+  }
+}
+
+async function toggleFollow() {
+  if (!props.seasonId || actionLoading.value) return
+  actionLoading.value = true
+  try {
+    const endpoint = isFollowed.value ? '/api/bilibili/bangumi/unfollow' : '/api/bilibili/bangumi/follow'
+    const res = await authFetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ season_id: props.seasonId })
+    })
+    const data = await res.json()
+    if (data.code === 0) {
+      isFollowed.value = !isFollowed.value
+    }
+  } catch (e) {
+    console.error('Toggle follow error:', e)
+  }
+  actionLoading.value = false
+}
+
+async function fetchLiveInfo() {
+  if (!props.roomId) return
+  try {
+    const [roomRes, anchorRes] = await Promise.all([
+      authFetch(`/api/bilibili/live-info?room_id=${props.roomId}`),
+      authFetch(`/api/bilibili/live-anchor?roomid=${props.roomId}`),
+    ])
+    const roomData = await roomRes.json()
+    const anchorData = await anchorRes.json()
+    if (roomData.code === 0) liveInfo.value = roomData.data
+    if (anchorData.code === 0) anchorInfo.value = anchorData.data
+  } catch (e) {
+    console.warn('Failed to fetch live info:', e)
   }
 }
 
@@ -161,9 +227,23 @@ function closeFavModal() {
 }
 
 async function fetchStreamUrl() {
-  if (!props.bvid || !currentCid.value) return
+  if (props.isLive) {
+    await fetchLiveStream()
+    return
+  }
+  if (!currentCid.value) return
+  if (!props.isBangumi && !props.bvid) return
   try {
-    const response = await authFetch(`/api/bilibili/mpd?bvid=${encodeURIComponent(props.bvid)}&cid=${currentCid.value}`)
+    let fetchUrl
+    if (props.isBangumi) {
+      const params = new URLSearchParams({ cid: currentCid.value })
+      if (props.aid) params.set('avid', props.aid)
+      if (currentEpId.value) params.set('ep_id', currentEpId.value)
+      fetchUrl = `/api/bilibili/bangumi-mpd?${params}`
+    } else {
+      fetchUrl = `/api/bilibili/mpd?bvid=${encodeURIComponent(props.bvid)}&cid=${currentCid.value}`
+    }
+    const response = await authFetch(fetchUrl)
     const lastPlayTime = response.headers.get('X-Last-Play-Time')
     if (lastPlayTime) {
       pendingSeekTime.value = parseInt(lastPlayTime) / 1000
@@ -184,6 +264,87 @@ async function fetchStreamUrl() {
   } catch (e) {
     console.error('Fetch stream URL error:', e)
     loadingStream.value = false
+  }
+}
+
+async function fetchLiveStream() {
+  if (!props.roomId) return
+  try {
+    const res = await authFetch(`/api/bilibili/live-stream?room_id=${props.roomId}`)
+    const data = await res.json()
+    if (data.code !== 0 || !data.data?.streams?.length) {
+      loadingStream.value = false
+      return
+    }
+    // 优先选 http_hls/ts/avc，其次 http_hls/fmp4/avc
+    const streams = data.data.streams
+    let best = streams.find(s => s.protocol === 'http_hls' && s.format === 'ts' && s.codec === 'avc')
+    if (!best) best = streams.find(s => s.protocol === 'http_hls' && s.codec === 'avc')
+    if (!best) best = streams.find(s => s.codec === 'avc')
+    if (!best) best = streams[0]
+
+    // 通过代理获取流
+    const proxyUrl = `/api/bilibili/stream?url=${encodeURIComponent(best.url)}`
+
+    streamUrl.value = 'hls-live' // 占位，让模板渲染播放器容器
+    nextTick(() => {
+      initHlsPlayer(proxyUrl)
+      loadingStream.value = false
+    })
+  } catch (e) {
+    console.error('Fetch live stream error:', e)
+    loadingStream.value = false
+  }
+}
+
+function initHlsPlayer(url) {
+  try {
+    if (dp.value) { dp.value.dispose(); dp.value = null }
+    if (!playerContainerRef.value) {
+      setTimeout(() => initHlsPlayer(url), 100)
+      return
+    }
+
+    const danmaku = new Danmaku({ items: [], persistOptions: true })
+    const player = new NPlayer({
+      controls: [['play', 'volume', 'time', 'spacer', 'airplay', 'settings', 'web-fullscreen', 'fullscreen'], ['progress']],
+      plugins: [danmaku]
+    })
+    dp.value = player
+    dp.value.on('play', () => { isPlaying.value = true })
+    dp.value.on('pause', () => { isPlaying.value = false })
+
+    if (Hls.isSupported()) {
+      hlsInstance = new Hls({
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 6,
+        enableWorker: true,
+      })
+      hlsInstance.attachMedia(dp.value.video)
+      hlsInstance.on(Hls.Events.MEDIA_ATTACHED, () => {
+        hlsInstance.loadSource(url)
+      })
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+        dp.value.video.play().catch(() => {})
+      })
+      hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLS error:', data.type, data.details)
+        if (data.fatal) {
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hlsInstance.startLoad()
+          else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hlsInstance.recoverMediaError()
+        }
+      })
+    } else if (dp.value.video.canPlayType('application/vnd.apple.mpegurl')) {
+      dp.value.video.src = url
+    }
+
+    dp.value.mount(playerContainerRef.value)
+    setTimeout(() => { if (dp.value) dp.value.emit('resize') }, 300)
+    if (playerResizeObserver) playerResizeObserver.disconnect()
+    playerResizeObserver = new ResizeObserver(() => { if (dp.value) dp.value.emit('resize') })
+    playerResizeObserver.observe(playerContainerRef.value)
+  } catch (e) {
+    console.error('initHlsPlayer error:', e)
   }
 }
 
@@ -318,6 +479,7 @@ async function switchEpisode(index) {
   if (!page) return
   currentPageIndex.value = index
   currentCid.value = page.cid
+  currentEpId.value = page.id || 0
   danmakuOid.value = page.cid
   pendingSeekTime.value = null
   loadingStream.value = true
@@ -344,13 +506,20 @@ function reportProgress() {
 
 // ── 生命周期 ──
 onMounted(async () => {
-  fetchVideoInfo()
-  fetchActionStatus()
+  if (props.isLive) {
+    fetchLiveInfo()
+  } else if (props.isBangumi) {
+    fetchBangumiInfo()
+  } else {
+    fetchVideoInfo()
+    fetchActionStatus()
+  }
   await fetchStreamUrl()
 })
 
 onUnmounted(() => {
-  reportProgress()
+  if (!props.isLive) reportProgress()
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null }
   if (playerResizeObserver) { playerResizeObserver.disconnect(); playerResizeObserver = null }
   if (dashPlayerInstance) { dashPlayerInstance.reset(); dashPlayerInstance = null }
   if (dp.value) { dp.value.dispose(); dp.value = null }
@@ -376,35 +545,71 @@ onUnmounted(() => {
           </button>
         </div>
         <template v-if="!infoCollapsed">
-          <div v-if="videoInfo?.owner" class="info-up">
-            <img :src="proxyAvatar(videoInfo.owner.face)" class="info-up-avatar" />
-            <span class="info-up-name">{{ videoInfo.owner.name }}</span>
-          </div>
-          <div class="info-title">{{ videoInfo?.title || cleanTitle(title) }}</div>
-          <div v-if="videoInfo?.stat" class="info-stats">
-            <span class="info-stat">{{ formatCount(videoInfo.stat.view) }}播放</span>
-            <span class="info-stat">{{ formatCount(videoInfo.stat.danmaku) }}弹幕</span>
-            <span class="info-stat">{{ formatDate(videoInfo.pubdate) }}</span>
-          </div>
-          <div v-if="videoInfo?.desc_v2?.length || videoInfo?.desc" class="info-desc-section">
-            <div class="info-desc-label">简介</div>
-            <div class="info-desc">
-              <template v-if="videoInfo?.desc_v2?.length">
-                <template v-for="(seg, i) in videoInfo.desc_v2" :key="i">
-                  <a v-if="seg.type === 2" :href="`https://space.bilibili.com/${seg.biz_id}`" target="_blank" class="info-desc-at">@{{ seg.raw_text }}</a>
-                  <span v-else>{{ seg.raw_text }}</span>
-                </template>
-              </template>
-              <template v-else>{{ videoInfo?.desc }}</template>
+          <!-- 直播信息 -->
+          <template v-if="props.isLive">
+            <div v-if="anchorInfo" class="info-up">
+              <img :src="proxyAvatar(anchorInfo.face)" class="info-up-avatar" />
+              <span class="info-up-name">{{ anchorInfo.uname }}</span>
             </div>
-          </div>
-          <!-- 互动按钮 -->
-          <div v-if="props.isLoggedIn" class="info-actions">
-            <button class="action-btn" :class="{ active: isFaved }" :disabled="actionLoading" @click="openFavModal()">
-              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-              <span>{{ isFaved ? '已收藏' : '收藏' }}</span>
-            </button>
-          </div>
+            <div class="info-title">{{ liveInfo?.title || cleanTitle(title) }}</div>
+            <div class="info-stats">
+              <span v-if="liveInfo?.online" class="info-stat">{{ formatCount(liveInfo.online) }}人气</span>
+              <span v-if="liveInfo?.area_name" class="info-stat">{{ liveInfo.area_name }}</span>
+            </div>
+            <div v-if="liveInfo?.description" class="info-desc-section">
+              <div class="info-desc-label">简介</div>
+              <div class="info-desc">{{ liveInfo.description }}</div>
+            </div>
+          </template>
+          <!-- 番剧信息 -->
+          <template v-else-if="props.isBangumi">
+            <div class="info-title">{{ bangumiInfo?.title || cleanTitle(title) }}</div>
+            <div v-if="bangumiInfo?.rating" class="info-stats">
+              <span class="info-stat">{{ bangumiInfo.rating.score }}分</span>
+              <span class="info-stat">{{ formatCount(bangumiInfo.rating.count) }}人评分</span>
+            </div>
+            <div v-if="bangumiInfo?.evaluate" class="info-desc-section">
+              <div class="info-desc-label">简介</div>
+              <div class="info-desc">{{ bangumiInfo.evaluate }}</div>
+            </div>
+            <div v-if="props.isLoggedIn" class="info-actions">
+              <button class="action-btn" :class="{ active: isFollowed }" :disabled="actionLoading" @click="toggleFollow()">
+                <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFollowed ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span>{{ isFollowed ? '已追番' : '追番' }}</span>
+              </button>
+            </div>
+          </template>
+          <!-- 普通视频信息 -->
+          <template v-else>
+            <div v-if="videoInfo?.owner" class="info-up">
+              <img :src="proxyAvatar(videoInfo.owner.face)" class="info-up-avatar" />
+              <span class="info-up-name">{{ videoInfo.owner.name }}</span>
+            </div>
+            <div class="info-title">{{ videoInfo?.title || cleanTitle(title) }}</div>
+            <div v-if="videoInfo?.stat" class="info-stats">
+              <span class="info-stat">{{ formatCount(videoInfo.stat.view) }}播放</span>
+              <span class="info-stat">{{ formatCount(videoInfo.stat.danmaku) }}弹幕</span>
+              <span class="info-stat">{{ formatDate(videoInfo.pubdate) }}</span>
+            </div>
+            <div v-if="videoInfo?.desc_v2?.length || videoInfo?.desc" class="info-desc-section">
+              <div class="info-desc-label">简介</div>
+              <div class="info-desc">
+                <template v-if="videoInfo?.desc_v2?.length">
+                  <template v-for="(seg, i) in videoInfo.desc_v2" :key="i">
+                    <a v-if="seg.type === 2" :href="`https://space.bilibili.com/${seg.biz_id}`" target="_blank" class="info-desc-at">@{{ seg.raw_text }}</a>
+                    <span v-else>{{ seg.raw_text }}</span>
+                  </template>
+                </template>
+                <template v-else>{{ videoInfo?.desc }}</template>
+              </div>
+            </div>
+            <div v-if="props.isLoggedIn" class="info-actions">
+              <button class="action-btn" :class="{ active: isFaved }" :disabled="actionLoading" @click="openFavModal()">
+                <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFaved ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                <span>{{ isFaved ? '已收藏' : '收藏' }}</span>
+              </button>
+            </div>
+          </template>
           <!-- 收藏夹选择弹窗 -->
           <div v-if="props.isLoggedIn && showFavModal" class="fav-modal-overlay" @click.self="closeFavModal()">
             <div class="fav-modal">
@@ -448,7 +653,7 @@ onUnmounted(() => {
                 @click="switchEpisode(idx)"
               >
                 <span class="info-ep-index">{{ idx + 1 }}</span>
-                <span class="info-ep-name">{{ page.part || `第${idx + 1}集` }}</span>
+                <span class="info-ep-name">{{ page.part || (page.title ? (page.long_title ? page.title + ' ' + page.long_title : page.title) : `第${idx + 1}集`) }}</span>
                 <span class="info-ep-dur">{{ page.duration ? formatSeconds(page.duration) : '' }}</span>
               </button>
             </div>

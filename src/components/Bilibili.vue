@@ -30,6 +30,7 @@ let resultsResizeObserver = null
 
 // 搜索状态
 const query = ref('')
+const searchType = ref('video') // 'video' | 'media_bangumi' | 'live'
 const allResults = ref([])      // 已缓存的全部结果（跨 API 页累积）
 const searchTotal = ref(0)
 const localPage = ref(1)        // 本地展示页码
@@ -262,10 +263,10 @@ async function search() {
   localPage.value = 1
   apiPage.value = 1
   try {
-    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=1`)
+    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=1&search_type=${searchType.value}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.result) {
-      allResults.value = data.data.result.filter(item => item.type === 'video')
+      allResults.value = filterSearchResults(data.data.result)
       searchTotal.value = data.data.numResults || allResults.value.length
     }
   } catch (e) {
@@ -274,16 +275,28 @@ async function search() {
   loading.value = false
 }
 
+// 根据搜索类型过滤结果
+function filterSearchResults(result) {
+  if (searchType.value === 'video') {
+    return result.filter(item => item.type === 'video')
+  } else if (searchType.value === 'media_bangumi') {
+    return result.filter(item => item.type === 'media_bangumi')
+  } else if (searchType.value === 'live') {
+    return result.filter(item => item.type === 'live_room')
+  }
+  return result
+}
+
 // 加载更多 API 页（追加到缓存）
 async function fetchApiPage(page) {
   const q = query.value.trim()
   if (!q) return
   loading.value = true
   try {
-    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${page}`)
+    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${page}&search_type=${searchType.value}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.result) {
-      const more = data.data.result.filter(item => item.type === 'video')
+      const more = filterSearchResults(data.data.result)
       allResults.value = [...allResults.value, ...more]
       apiPage.value = page
     }
@@ -305,6 +318,82 @@ async function goToPage(page) {
 
 function onSearchKeydown(e) {
   if (e.key === 'Enter') search()
+}
+
+// 切换搜索分类
+function switchSearchType(type) {
+  if (searchType.value === type) return
+  searchType.value = type
+  // 如果已有搜索词，自动重新搜索
+  if (query.value.trim() && searched.value) {
+    search()
+  }
+}
+
+// 番剧点击：获取分集信息并打开播放器
+async function playBangumi(item) {
+  const seasonId = item.season_id
+  if (!seasonId) return
+  try {
+    const res = await authFetch(`/api/bilibili/pagelist?season_id=${seasonId}`)
+    const data = await res.json()
+    if (data.code === 0 && data.data?.length) {
+      const firstEp = data.data[0]
+      const video = {
+        bvid: firstEp.bvid || '',
+        aid: firstEp.aid || 0,
+        title: cleanTitle(item.title),
+        author: item.season_type_name || '',
+        pic: item.cover || '',
+        play: 0,
+        favorites: 0,
+        review: 0,
+        pubdate: item.pubtime || 0,
+        duration: '',
+        cid: firstEp.cid || 0,
+        isBangumi: true,
+        epId: firstEp.id || 0,
+        seasonId: seasonId,
+        pageList: data.data,
+      }
+      playVideo(video)
+    }
+  } catch (e) {
+    console.error('Play bangumi error:', e)
+  }
+}
+
+async function playLive(item) {
+  const roomId = item.roomid || item.room_id
+  if (!roomId) return
+
+  // 同一直播间 → 置顶
+  if (currentBvid.value === `live_${roomId}` && isPlayerWindowOpen()) {
+    bringToFront(playerWindowId)
+    return
+  }
+
+  if (isPlayerWindowOpen()) closeWindow(playerWindowId)
+  playerWindowId = null
+  currentBvid.value = `live_${roomId}`
+
+  playerWindowId = openWindow({
+    title: cleanTitle(item.title || ''),
+    icon: '📺',
+    width: 1000,
+    height: 650,
+    component: markRaw(BilibiliPlayer),
+    props: {
+      bvid: '',
+      aid: 0,
+      title: item.title || '',
+      pageList: [],
+      initialCid: 0,
+      isLoggedIn: !!bilibiliUser.value,
+      isLive: true,
+      roomId: parseInt(roomId),
+    },
+  })
 }
 
 // 推荐分页
@@ -651,17 +740,19 @@ async function playVideo(video) {
   currentVideo.value = video
   currentBvid.value = video.bvid
 
-  // 获取分页列表
-  let pageList
-  try {
-    const cidRes = await authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
-    const cidData = await cidRes.json()
-    if (cidData.code !== 0 || !cidData.data?.length) throw new Error('获取视频信息失败')
-    pageList = cidData.data
-  } catch (e) {
-    console.error('Play video error:', e)
-    alert('播放失败: ' + e.message)
-    return
+  // 获取分页列表（番剧已预取 pageList，直接使用）
+  let pageList = video.pageList
+  if (!pageList) {
+    try {
+      const cidRes = await authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
+      const cidData = await cidRes.json()
+      if (cidData.code !== 0 || !cidData.data?.length) throw new Error('获取视频信息失败')
+      pageList = cidData.data
+    } catch (e) {
+      console.error('Play video error:', e)
+      alert('播放失败: ' + e.message)
+      return
+    }
   }
 
   // 打开独立播放器窗口
@@ -678,6 +769,9 @@ async function playVideo(video) {
       pageList,
       initialCid: pageList[0].cid,
       isLoggedIn: !!bilibiliUser.value,
+      isBangumi: video.isBangumi || false,
+      epId: video.epId || 0,
+      seasonId: video.seasonId || 0,
     },
   })
 }
@@ -781,13 +875,20 @@ onUnmounted(() => {
         v-model="query"
         type="text"
         class="search-input"
-        placeholder="搜索视频..."
+        :placeholder="searchType === 'video' ? '搜索视频...' : searchType === 'media_bangumi' ? '搜索番剧...' : '搜索直播...'"
         @keydown="onSearchKeydown"
         autofocus
       />
       <button class="search-btn" @click="search()" :disabled="loading">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
+    </div>
+
+    <!-- 搜索分类标签 -->
+    <div v-if="activeTab === 'search'" class="search-type-bar">
+      <button class="search-type-btn" :class="{ active: searchType === 'video' }" @click="switchSearchType('video')">视频</button>
+      <button class="search-type-btn" :class="{ active: searchType === 'media_bangumi' }" @click="switchSearchType('media_bangumi')">番剧</button>
+      <button class="search-type-btn" :class="{ active: searchType === 'live' }" @click="switchSearchType('live')">直播</button>
     </div>
 
     <!-- 内容区域（统一容器，ResizeObserver 监听此元素） -->
@@ -865,50 +966,133 @@ onUnmounted(() => {
 
       <template v-if="!loading && pagedResults.length">
         <div class="result-list">
-          <div
-            v-for="video in pagedResults"
-            :key="video.bvid"
-            class="video-card"
-            :class="{ active: currentBvid === video.bvid }"
-            @click="playVideo(video)"
-          >
-            <div class="video-cover-wrap">
-              <img
-                v-if="video.pic"
-                :src="proxyImg(video.pic)"
-                class="video-cover"
-                loading="lazy"
-              />
-              <div class="video-duration">{{ video.duration }}</div>
-              <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(video.aid, $event)" title="添加到稍后再看">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              </button>
-            </div>
-            <div class="video-info">
-              <div class="video-title">{{ cleanTitle(video.title) }}</div>
-              <div class="video-meta">
-                <span class="video-author">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  {{ video.author }}
-                </span>
+          <!-- 视频卡片 -->
+          <template v-if="searchType === 'video'">
+            <div
+              v-for="video in pagedResults"
+              :key="video.bvid"
+              class="video-card"
+              :class="{ active: currentBvid === video.bvid }"
+              @click="playVideo(video)"
+            >
+              <div class="video-cover-wrap">
+                <img
+                  v-if="video.pic"
+                  :src="proxyImg(video.pic)"
+                  class="video-cover"
+                  loading="lazy"
+                />
+                <div class="video-duration">{{ video.duration }}</div>
+                <button v-if="bilibiliUser" class="toview-btn" @click="addToToview(video.aid, $event)" title="添加到稍后再看">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </button>
               </div>
-              <div class="video-stats">
-                <span class="stat-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                  {{ formatCount(video.play) }}
-                </span>
-                <span class="stat-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-                  {{ formatCount(video.favorites) }}
-                </span>
-                <span class="stat-item">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  {{ formatCount(video.review) }}
-                </span>
-                <span class="video-date">{{ formatDate(video.pubdate) }}</span>
+              <div class="video-info">
+                <div class="video-title">{{ cleanTitle(video.title) }}</div>
+                <div class="video-meta">
+                  <span class="video-author">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    {{ video.author }}
+                  </span>
+                </div>
+                <div class="video-stats">
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    {{ formatCount(video.play) }}
+                  </span>
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                    {{ formatCount(video.favorites) }}
+                  </span>
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    {{ formatCount(video.review) }}
+                  </span>
+                  <span class="video-date">{{ formatDate(video.pubdate) }}</span>
+                </div>
               </div>
             </div>
-          </div>
+          </template>
+
+          <!-- 番剧卡片 -->
+          <template v-if="searchType === 'media_bangumi'">
+            <div
+              v-for="item in pagedResults"
+              :key="item.media_id"
+              class="video-card bangumi-card"
+              @click="playBangumi(item)"
+            >
+              <div class="video-cover-wrap">
+                <img
+                  v-if="item.cover"
+                  :src="proxyImg(item.cover)"
+                  class="video-cover"
+                  loading="lazy"
+                />
+                <div v-if="item.badges?.length" class="bangumi-badge" :style="{ background: item.badges[0].bg_color || '#fb7299' }">
+                  {{ item.badges[0].text }}
+                </div>
+              </div>
+              <div class="video-info">
+                <div class="video-title">{{ cleanTitle(item.title) }}</div>
+                <div v-if="item.org_title" class="video-subtitle">{{ cleanTitle(item.org_title) }}</div>
+                <div class="video-meta">
+                  <span class="bangumi-type">{{ item.season_type_name }}</span>
+                  <span v-if="item.areas" class="bangumi-area">{{ item.areas }}</span>
+                  <span v-if="item.styles" class="bangumi-area">{{ item.styles }}</span>
+                </div>
+                <div class="video-stats">
+                  <span v-if="item.media_score?.score" class="stat-item bangumi-score">
+                    {{ item.media_score.score }}
+                  </span>
+                  <span v-if="item.media_score?.user_count" class="stat-item">
+                    {{ formatCount(item.media_score.user_count) }}人评分
+                  </span>
+                  <span class="stat-item">{{ item.ep_size }}集</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 直播间卡片 -->
+          <template v-if="searchType === 'live'">
+            <div
+              v-for="item in pagedResults"
+              :key="item.roomid"
+              class="video-card live-card"
+              @click="playLive(item)"
+            >
+              <div class="video-cover-wrap">
+                <img
+                  v-if="item.user_cover || item.cover"
+                  :src="proxyImg(item.user_cover || item.cover)"
+                  class="video-cover"
+                  loading="lazy"
+                />
+                <div class="live-badge">直播中</div>
+                <div class="live-online">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+                  {{ formatCount(item.online) }}人
+                </div>
+              </div>
+              <div class="video-info">
+                <div class="video-title">{{ cleanTitle(item.title) }}</div>
+                <div class="video-meta">
+                  <span class="video-author">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    {{ item.uname }}
+                  </span>
+                  <span v-if="item.cate_name" class="history-badge">{{ item.cate_name }}</span>
+                </div>
+                <div class="video-stats">
+                  <span class="stat-item">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    {{ formatCount(item.attentions) }}关注
+                  </span>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
 
         <div v-if="totalPages > 1" class="pagination">
@@ -923,12 +1107,12 @@ onUnmounted(() => {
       </template>
 
       <div v-if="!loading && searched && !allResults.length" class="empty-state">
-        <div class="empty-text">未找到相关视频</div>
+        <div class="empty-text">未找到{{ searchType === 'video' ? '相关视频' : searchType === 'media_bangumi' ? '相关番剧' : '相关直播' }}</div>
       </div>
 
       <div v-if="!loading && !searched" class="empty-state">
         <div class="empty-icon">📺</div>
-        <div class="empty-text">搜索视频开始播放</div>
+        <div class="empty-text">搜索{{ searchType === 'video' ? '视频' : searchType === 'media_bangumi' ? '番剧' : '直播' }}开始播放</div>
       </div>
     </div>
 
@@ -1263,6 +1447,36 @@ onUnmounted(() => {
 .search-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* 搜索分类标签 */
+.search-type-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.search-type-btn {
+  padding: 5px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.search-type-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.search-type-btn.active {
+  background: rgba(0, 161, 214, 0.2);
+  border-color: rgba(0, 161, 214, 0.4);
+  color: #00a1d6;
 }
 
 /* 结果列表 */
@@ -1872,5 +2086,67 @@ onUnmounted(() => {
 .favorites-detail-count {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
+}
+
+/* 番剧卡片 */
+.bangumi-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #fff;
+  font-weight: 500;
+}
+
+.bangumi-type {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(251, 114, 153, 0.15);
+  color: #fb7299;
+  border-radius: 4px;
+}
+
+.bangumi-area {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.bangumi-score {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffa726;
+}
+
+/* 直播间卡片 */
+.live-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  background: rgba(251, 73, 73, 0.85);
+  border-radius: 4px;
+  font-size: 10px;
+  color: #fff;
+  font-weight: 500;
+}
+
+.live-online {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 4px;
+  font-size: 10px;
+  color: #4fc1e9;
+}
+
+.live-online svg {
+  color: #4fc1e9;
 }
 </style>

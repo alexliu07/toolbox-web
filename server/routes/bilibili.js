@@ -315,25 +315,42 @@ router.post('/logout', requireAuth, async (req, res) => {
 
 // ── 视频相关端点 ──
 
-// 搜索视频
+// 搜索（视频/番剧/直播）
 router.get('/search', optionalAuth, async (req, res) => {
   try {
-    const { keyword, page = 1 } = req.query
+    const { keyword, page = 1, search_type = 'video' } = req.query
     if (!keyword) {
       return res.status(400).json({ code: -400, message: 'keyword is required' })
     }
 
+    const validTypes = ['video', 'media_bangumi', 'live']
+    const type = validTypes.includes(search_type) ? search_type : 'video'
+
     await fetchWbiKeys()
-    const params = signWBI({
-      search_type: 'video',
+    const wbiParams = {
+      search_type: type,
       keyword: keyword,
       page: parseInt(page),
-      order: 'totalrank',
-      duration: 0,
-      tids: 0
-    })
+    }
+    if (type === 'video') {
+      wbiParams.order = 'totalrank'
+      wbiParams.duration = 0
+      wbiParams.tids = 0
+    } else if (type === 'live') {
+      wbiParams.order = 'online'
+    }
+    const params = signWBI(wbiParams)
     const cookieStr = getCookiesString(req.user?.id)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params, cookieStr ? { cookies: cookieStr } : {})
+
+    // live搜索返回的是 { result: { live_room: [...], live_user: [...] } }
+    // 统一为 { data: { result: [...] } } 格式
+    if (type === 'live' && data.code === 0 && data.data?.result) {
+      const rooms = data.data.result.live_room || []
+      data.data.result = rooms
+      data.data.numResults = data.data.pageinfo?.live_room?.numResults || rooms.length
+    }
+
     res.json(data)
   } catch (e) {
     console.error('Bilibili search error:', e.message)
@@ -344,13 +361,30 @@ router.get('/search', optionalAuth, async (req, res) => {
 // 获取视频分页信息（获取cid）
 router.get('/pagelist', optionalAuth, async (req, res) => {
   try {
-    const { bvid } = req.query
-    if (!bvid) {
-      return res.status(400).json({ code: -400, message: 'bvid is required' })
+    const { bvid, season_id } = req.query
+    if (!bvid && !season_id) {
+      return res.status(400).json({ code: -400, message: 'bvid or season_id is required' })
     }
     const cookieStr = getCookiesString(req.user?.id)
-    const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid }, cookieStr ? { cookies: cookieStr } : {})
-    res.json(data)
+    if (season_id) {
+      // 番剧分集信息
+      const data = await fetchUrl('https://api.bilibili.com/pgc/view/web/season', { season_id }, cookieStr ? { cookies: cookieStr } : {})
+      if (data.code === 0 && data.result?.episodes?.length) {
+        const eps = data.result.episodes.map(ep => ({
+          aid: ep.aid,
+          bvid: ep.bvid,
+          cid: ep.cid,
+          title: ep.title + ' ' + (ep.long_title || ''),
+          id: ep.id,
+        }))
+        res.json({ code: 0, data: eps })
+      } else {
+        res.json(data)
+      }
+    } else {
+      const data = await fetchUrl('https://api.bilibili.com/x/player/pagelist', { bvid }, cookieStr ? { cookies: cookieStr } : {})
+      res.json(data)
+    }
   } catch (e) {
     console.error('Bilibili pagelist error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
@@ -497,6 +531,292 @@ router.get('/mpd', optionalAuth, async (req, res) => {
     res.send(mpdXml)
   } catch (e) {
     console.error('MPD generation error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 番剧视频流 MPD 清单生成
+router.get('/bangumi-mpd', optionalAuth, async (req, res) => {
+  try {
+    const { avid, cid, ep_id } = req.query
+    if (!cid || (!avid && !ep_id)) {
+      return res.status(400).json({ code: -400, message: 'cid and (avid or ep_id) are required' })
+    }
+
+    const params = {
+      cid: parseInt(cid),
+      fnval: 4048,
+      fourk: 1,
+      fnver: 0,
+    }
+    if (avid) params.avid = parseInt(avid)
+    if (ep_id) params.ep_id = parseInt(ep_id)
+
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/pgc/player/web/playurl', params, cookieStr ? { cookies: cookieStr } : {})
+
+    if (data.code !== 0) {
+      console.error('Bangumi playurl error:', data.code, data.message)
+      return res.status(502).json({ code: data.code, message: data.message || 'bangumi playurl error' })
+    }
+
+    // 番剧接口返回 result 而非 data
+    const result = data.result || data.data
+    const dash = result?.dash
+    if (!dash || !dash.video?.length) {
+      console.error('Bangumi no DASH streams, response keys:', Object.keys(data), 'result keys:', result ? Object.keys(result) : 'null')
+      return res.status(502).json({ code: -502, message: 'no DASH streams' })
+    }
+
+    const duration = dash.duration || 0
+
+    // 构建清晰度 id → 描述 的映射
+    const qualityMap = {}
+    const acceptQuality = result?.accept_quality || []
+    const acceptDescription = result?.accept_description || []
+    for (let i = 0; i < acceptQuality.length; i++) {
+      qualityMap[acceptQuality[i]] = acceptDescription[i] || ''
+    }
+
+    const streamBase = '/api/bilibili/stream'
+
+    // 视频 AdaptationSet — 仅 AVC 编码
+    let videoRepresentations = ''
+    let cnt = 0
+    for (let i = 0; i < dash.video.length; i++) {
+      const v = dash.video[i]
+      if (v.codecid !== 7) continue
+      const proxyVideoUrl = `${streamBase}?url=${encodeURIComponent(v.baseUrl)}`
+      const codecs = v.codecs || 'avc1.640032'
+      const bandwidth = v.bandwidth || 1000000
+      const width = v.width || 1920
+      const height = v.height || 1080
+      const fps = `${parseFloat(v.frameRate) * 1000}/1000`
+      const label = qualityMap[v.id] || `${height}P`
+      videoRepresentations += `
+        <Representation id="${cnt++}" bandwidth="${bandwidth}" codecs="${codecs}" width="${width}" height="${height}" frameRate="${fps}" label="${label}">
+          <BaseURL>${escapeXml(proxyVideoUrl)}</BaseURL>
+        </Representation>`
+    }
+
+    let adaptationSets = `
+    <AdaptationSet mimeType="video/mp4">
+      ${videoRepresentations}
+    </AdaptationSet>`
+
+    // 音频 AdaptationSet
+    if (dash.audio?.length) {
+      let audioRepresentations = ''
+      for (let i = 0; i < dash.audio.length; i++) {
+        const a = dash.audio[i]
+        const proxyAudioUrl = `${streamBase}?url=${encodeURIComponent(a.baseUrl)}`
+        const codecs = a.codecs || 'mp4a.40.2'
+        const bandwidth = a.bandwidth || 128000
+        audioRepresentations += `
+        <Representation id="${i}" bandwidth="${bandwidth}" codecs="${codecs}">
+          <BaseURL>${escapeXml(proxyAudioUrl)}</BaseURL>
+        </Representation>`
+      }
+      adaptationSets += `
+    <AdaptationSet mimeType="audio/mp4">
+      ${audioRepresentations}
+    </AdaptationSet>`
+    }
+
+    const mpdXml = `<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" type="static" mediaPresentationDuration="PT${duration}S" minBufferTime="PT1.5S">
+  <Period>
+    ${adaptationSets}
+  </Period>
+</MPD>`
+
+    // 返回上次播放进度
+    const lastPlayTime = result?.last_play_time ?? null
+    if (lastPlayTime != null) {
+      res.setHeader('X-Last-Play-Time', lastPlayTime)
+    }
+
+    res.setHeader('Content-Type', 'application/dash+xml')
+    res.send(mpdXml)
+  } catch (e) {
+    console.error('Bangumi MPD generation error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 番剧信息（标题、简介、追番状态等）
+router.get('/bangumi-info', optionalAuth, async (req, res) => {
+  try {
+    const { season_id } = req.query
+    if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
+    const cookieStr = getCookiesString(req.user?.id)
+    const data = await fetchUrl('https://api.bilibili.com/pgc/view/web/season', { season_id }, cookieStr ? { cookies: cookieStr } : {})
+    if (data.code !== 0) return res.json({ code: data.code, message: data.message })
+    const r = data.result || data.data
+    res.json({
+      code: 0,
+      data: {
+        title: r?.season_title || r?.title || '',
+        evaluate: r?.evaluate || '',
+        areas: r?.areas || [],
+        styles: r?.styles || [],
+        publish: r?.publish || {},
+        rating: r?.rating || null,
+        total: r?.total || 0,
+        new_ep: r?.new_ep || {},
+        user_status: r?.user_status || {},
+      }
+    })
+  } catch (e) {
+    console.error('Bangumi info error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 追番
+router.post('/bangumi/follow', optionalAuth, async (req, res) => {
+  try {
+    const { season_id } = req.body
+    if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cred = getBilibiliCredentials(req.user?.id)
+    const csrf = cred?.cookies?.bili_jct || ''
+    const params = new URLSearchParams({ season_id: String(season_id), csrf })
+    const data = await fetchUrl('https://api.bilibili.com/pgc/web/follow/add', {}, {
+      method: 'POST', cookies: cookieStr,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    })
+    res.json(data)
+  } catch (e) {
+    console.error('Bangumi follow error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 取消追番
+router.post('/bangumi/unfollow', optionalAuth, async (req, res) => {
+  try {
+    const { season_id } = req.body
+    if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
+    const cookieStr = getCookiesString(req.user?.id)
+    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cred = getBilibiliCredentials(req.user?.id)
+    const csrf = cred?.cookies?.bili_jct || ''
+    const params = new URLSearchParams({ season_id: String(season_id), csrf })
+    const data = await fetchUrl('https://api.bilibili.com/pgc/web/follow/del', {}, {
+      method: 'POST', cookies: cookieStr,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    })
+    res.json(data)
+  } catch (e) {
+    console.error('Bangumi unfollow error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 直播间信息
+router.get('/live-info', async (req, res) => {
+  try {
+    const { room_id } = req.query
+    if (!room_id) return res.status(400).json({ code: -400, message: 'room_id is required' })
+    const data = await fetchUrl('https://api.live.bilibili.com/room/v1/Room/get_info', { room_id })
+    if (data.code !== 0) return res.json({ code: data.code, message: data.message })
+    const d = data.data
+    res.json({
+      code: 0,
+      data: {
+        room_id: d.room_id,
+        short_id: d.short_id,
+        uid: d.uid,
+        title: d.title,
+        description: d.description,
+        cover: d.user_cover,
+        keyframe: d.keyframe,
+        live_status: d.live_status,
+        online: d.online,
+        area_name: d.area_name,
+        parent_area_name: d.parent_area_name,
+        live_time: d.live_time,
+        tags: d.tags,
+      }
+    })
+  } catch (e) {
+    console.error('Live info error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 直播流地址
+router.get('/live-stream', async (req, res) => {
+  try {
+    const { room_id, qn = 150 } = req.query
+    if (!room_id) return res.status(400).json({ code: -400, message: 'room_id is required' })
+    const data = await fetchUrl('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', {
+      room_id,
+      protocol: '0,1',
+      format: '0,1,2',
+      codec: '0,1',
+      qn: parseInt(qn),
+      platform: 'web',
+      ptype: 8,
+    })
+    if (data.code !== 0) return res.json({ code: data.code, message: data.message })
+    const playurl = data.data?.playurl_info?.playurl
+    if (!playurl) return res.json({ code: -502, message: 'no playurl' })
+
+    // 提取所有可用流
+    const streams = []
+    for (const protocol of (playurl.stream || [])) {
+      for (const format of (protocol.format || [])) {
+        for (const codec of (format.codec || [])) {
+          if (!codec.url_info?.length) continue
+          const urlObj = codec.url_info[0]
+          streams.push({
+            protocol: protocol.protocol_name,
+            format: format.format_name,
+            codec: codec.codec_name,
+            url: urlObj.host + codec.base_url + urlObj.extra,
+            current_qn: codec.current_qn,
+            accept_qn: codec.accept_qn,
+          })
+        }
+      }
+    }
+
+    // 画质描述
+    const qnDesc = (playurl.g_qn_desc || []).map(q => ({ qn: q.qn, desc: q.desc }))
+
+    res.json({ code: 0, data: { streams, qn_desc: qnDesc, current_qn: playurl.stream?.[0]?.format?.[0]?.codec?.[0]?.current_qn || 0 } })
+  } catch (e) {
+    console.error('Live stream error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 直播主播信息
+router.get('/live-anchor', async (req, res) => {
+  try {
+    const { roomid } = req.query
+    if (!roomid) return res.status(400).json({ code: -400, message: 'roomid is required' })
+    const data = await fetchUrl('https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room', { roomid })
+    if (data.code !== 0) return res.json({ code: data.code, message: data.message })
+    const info = data.data?.info
+    if (!info) return res.json({ code: -502, message: 'no anchor info' })
+    res.json({
+      code: 0,
+      data: {
+        uid: info.uid,
+        uname: info.uname,
+        face: info.face,
+        gender: info.gender,
+        official_verify: info.official_verify,
+      }
+    })
+  } catch (e) {
+    console.error('Live anchor error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
   }
 })
