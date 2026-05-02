@@ -7,12 +7,12 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "NeteaseCloudMusicApi": "^4.31.0",
     "bcryptjs": "^3.0.3",
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
     "mime-types": "^2.1.35",
     "multer": "2.1.1",
-    "NeteaseCloudMusicApi": "^4.30.0",
     "qrcode": "^1.5.4",
     "sql.js": "^1.14.1"
   },

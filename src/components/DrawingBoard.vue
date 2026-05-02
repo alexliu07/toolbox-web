@@ -1,5 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
+import { useOverlay } from '@overlastic/vue'
+import Overlay from './Dialog.vue'
 
 // ── reactive tool state (used in template) ──
 const tool       = ref('pen')
@@ -29,6 +31,8 @@ let strokes = []
 let seq = 0
 
 const authFetch = inject('authFetch')
+
+const openOverlay = useOverlay(Overlay)
 
 // ── transient state ──
 let liveStroke      = null
@@ -592,7 +596,8 @@ async function loadDrawing(name) {
 }
 
 async function deleteDrawing(name) {
-  if (!confirm(`删除存档 "${name}"？`)) return
+  const value = await openOverlay({ title: `删除存档 "${name}"？`, type: "danger" })
+  if (value!== "confirmed") return
   await authFetch(`/api/drawings/${encodeURIComponent(name)}`, { method: 'DELETE' })
   await loadSavesList()
 }

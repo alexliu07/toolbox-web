@@ -303,6 +303,21 @@ export function deleteUserFile(userId, fileName) {
   saveDatabase()
 }
 
+export function updateUserFile(userId, fileName, filePath=null, fileSize=null, mimeType=null) {
+  let l = [filePath,fileSize, mimeType];
+  const n = ["file_path", "file_size", "mime_type"].map((v, i)=>{
+    if (l[i] !== null){
+      return v+' = ?'
+    }else{return null}
+  }).filter((v)=> v !== null)
+  l = l.filter((v)=>v !== null)
+  db.run(
+      'UPDATE user_files SET '+n.join(", ")+' WHERE user_id = ? AND file_name = ?',
+      [...l, userId, fileName],
+  )
+  saveDatabase()
+}
+
 export function renameUserFile(userId, oldName, newName, newPath) {
   db.run(
     "UPDATE user_files SET file_name = ?, file_path = ?, created_at = datetime('now') WHERE user_id = ? AND file_name = ?",

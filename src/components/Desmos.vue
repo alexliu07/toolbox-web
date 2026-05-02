@@ -1,5 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, inject } from 'vue'
+import { useOverlay } from '@overlastic/vue'
+import Overlay from './Dialog.vue'
 
 const iframeRef = ref(null)
 const calcReady = ref(false)
@@ -9,6 +11,8 @@ const showSaves = ref(false)
 const saveStatus = ref('')   // '' | 'saving' | 'ok' | 'err'
 
 const authFetch = inject('authFetch')
+
+const openOverlay = useOverlay(Overlay)
 
 // ── poll for calc instance after iframe loads ──
 let pollTimer = null
@@ -86,7 +90,8 @@ async function loadGraph(name) {
 }
 
 async function deleteGraph(name) {
-  if (!confirm(`删除存档 "${name}"？`)) return
+  const value = await openOverlay({ title: `删除存档 "${name}"？`, type: "danger" })
+  if (value!== "confirmed") return
   await authFetch(`/api/desmos/${encodeURIComponent(name)}`, { method: 'DELETE' })
   await loadSavesList()
 }

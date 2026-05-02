@@ -134,4 +134,20 @@ router.get('/raw/:name', requireAuth, (req, res) => {
   }
 })
 
+router.put('/raw/:name', requireAuth, (req, res) => {
+  try {
+    const fileRecord = getUserFile(req.user.id, req.params.name)
+    if (!fileRecord) return res.status(404).json({ error: 'File not found' })
+
+    const filePath = path.join(STORAGE_DIR, fileRecord.file_path)
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' })
+
+    const mimeType = mime.lookup(filePath) || 'application/octet-stream'
+    res.setHeader('Content-Type', mimeType)
+    res.sendFile(filePath)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router
