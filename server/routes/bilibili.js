@@ -919,11 +919,11 @@ router.get('/stream', optionalAuth, async (req, res) => {
       }
 
       const proxyReq = httpModule.request(options, (proxyRes) => {
-        // 正常响应（200 或 206）→ 直接 pipe
         const contentType = proxyRes.headers['content-type'] || 'video/mp4'
+        const isM3u8 = /mpegurl/i.test(contentType) || targetUrl.includes('.m3u8')
 
         res.status(proxyRes.statusCode)
-        res.setHeader('Content-Type', contentType)
+        res.setHeader('Content-Type', isM3u8 ? 'application/vnd.apple.mpegurl' : contentType)
         res.setHeader('Access-Control-Allow-Origin', '*')
         res.setHeader('Access-Control-Allow-Headers', 'Range')
         res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges')
@@ -931,10 +931,43 @@ router.get('/stream', optionalAuth, async (req, res) => {
           res.setHeader('Content-Range', proxyRes.headers['content-range'])
         }
         res.setHeader('Accept-Ranges', proxyRes.headers['accept-ranges'] || 'bytes')
-        if (proxyRes.headers['content-length']) {
-          res.setHeader('Content-Length', proxyRes.headers['content-length'])
+
+        if (isM3u8) {
+          // m3u8: 缓冲内容，重写相对路径的TS片段URL为代理绝对URL
+          const chunks = []
+          proxyRes.on('data', chunk => chunks.push(chunk))
+          proxyRes.on('end', () => {
+            let body = Buffer.concat(chunks).toString('utf8')
+            // 计算m3u8所在目录的baseUrl
+            const lastSlash = targetUrl.lastIndexOf('/')
+            const baseUrl = lastSlash >= 0 ? targetUrl.substring(0, lastSlash + 1) : targetUrl
+            // 重写非绝对URL的行（TS片段、key等）
+            body = body.split('\n').map(line => {
+              const trimmed = line.trim()
+              // 跳过注释和空行
+              if (!trimmed || trimmed.startsWith('#')) {
+                // 处理 #EXT-X-MAP 的 URI 和 #EXT-X-KEY 的 URI
+                return trimmed.replace(/URI="([^"]+)"/gi, (match, uri) => {
+                  if (/^https?:\/\//i.test(uri)) return match
+                  const absUrl = new URL(uri, baseUrl).href
+                  return `URI="/api/bilibili/stream?url=${encodeURIComponent(absUrl)}"`
+                })
+              }
+              // 非注释行 = 片段URL
+              if (/^https?:\/\//i.test(trimmed)) return line
+              const absUrl = new URL(trimmed, baseUrl).href
+              return `/api/bilibili/stream?url=${encodeURIComponent(absUrl)}`
+            }).join('\n')
+            res.setHeader('Content-Length', Buffer.byteLength(body))
+            res.end(body)
+          })
+        } else {
+          // 非m3u8：直接pipe（视频流等）
+          if (proxyRes.headers['content-length']) {
+            res.setHeader('Content-Length', proxyRes.headers['content-length'])
+          }
+          proxyRes.pipe(res)
         }
-        proxyRes.pipe(res)
       })
 
       proxyReq.on('error', (e) => {
