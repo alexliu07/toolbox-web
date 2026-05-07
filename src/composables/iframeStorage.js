@@ -1,5 +1,38 @@
 // src/directives/iframeStorage.js
-import { injectStoragePolyfill } from './storage.js'
+import {useAuth} from './useAuth.js'
+
+const {createServerStorage,isLoggedIn,authFetch} = useAuth()
+
+export function injectStoragePolyfill(targetWindow) {
+    // 初始化时从后端加载localStorage数据
+    let serverData = {}
+    if (isLoggedIn.value) {
+        try {
+            const res = authFetch('/api/localstorage')
+            if (res.ok) {
+                serverData = res.json()
+            }
+        } catch (e) {
+            console.warn('Failed to load localStorage from server:', e)
+        }
+    }
+    const serverStorage = createServerStorage(serverData)
+    // const trueLocalStorage = targetWindow.localStorage;
+    try {
+        targetWindow.Object.defineProperty(targetWindow, 'localStorage', {
+            value: serverStorage,
+            configurable: true,
+            enumerable: true,
+            writable: false
+        })
+    } catch (e) {
+        targetWindow.localStorage = serverStorage
+    }
+
+    // targetWindow.trueLocalStorage = trueLocalStorage
+
+    return true // 已注入
+}
 
 function handleLoad(el) {
     try {
