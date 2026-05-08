@@ -125,6 +125,8 @@ provide('refreshWallpaper', loadWallpaper)
 
 // Provide window manager primitives to child components
 provide('openWindow', openWindow)
+provide('closeWindow', closeWindow)
+provide('bringToFront', bringToFront)
 provide('updateWindow', updateWindow)
 provide('windows', windows)
 provide('getTaskbarButtonRect', getTaskbarButtonRect)
