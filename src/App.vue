@@ -180,22 +180,24 @@ onUnmounted(() => clearInterval(timer))
     </Transition>
 
     <main class="content">
-      <!-- 时钟区域 -->
-      <section class="clock-section">
-        <div class="clock-card">
-          <div class="clock-time">
-            <span class="seg">{{ timeH }}</span>
-            <span class="colon">:</span>
-            <span class="seg">{{ timeM }}</span>
+      <!-- 时钟 + 用户信息 -->
+      <div class="header-block">
+        <section class="clock-section">
+          <div class="clock-card">
+            <div class="clock-time">
+              <span class="seg">{{ timeH }}</span>
+              <span class="colon">:</span>
+              <span class="seg">{{ timeM }}</span>
+            </div>
+            <div class="clock-date">{{ dateStr }}</div>
           </div>
-          <div class="clock-date">{{ dateStr }}</div>
-        </div>
-      </section>
+        </section>
 
-      <!-- 用户信息栏 -->
-      <div v-if="isLoggedIn" class="user-bar">
-        <span class="user-greeting">👤 {{ currentUser.displayName || currentUser.username }}</span>
-        <button class="logout-btn" @click="handleLogout">退出登录</button>
+        <!-- 用户信息栏 -->
+        <div v-if="isLoggedIn" class="user-bar">
+          <span class="user-greeting">👤 {{ currentUser.displayName || currentUser.username }}</span>
+          <button class="logout-btn" @click="handleLogout">退出登录</button>
+        </div>
       </div>
 
       <!-- 工具启动台 -->
@@ -251,6 +253,17 @@ onUnmounted(() => clearInterval(timer))
   align-items: center;
 }
 
+/* ── 时钟 + 用户信息 共享宽度容器 ── */
+.header-block {
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: stretch;
+  margin-top: 100px;
+}
+
 /* ── 用户信息栏 ── */
 .user-bar {
   display: flex;
@@ -262,9 +275,6 @@ onUnmounted(() => clearInterval(timer))
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  width: 100%;
-  max-width: 600px;
-  box-sizing: border-box;
   box-shadow:
     0 8px 32px rgba(0, 0, 0, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
@@ -389,7 +399,6 @@ onUnmounted(() => clearInterval(timer))
   width: 100%;
   display: flex;
   justify-content: center;
-  padding-top: 100px;
 }
 
 .clock-card {
@@ -537,7 +546,7 @@ onUnmounted(() => clearInterval(timer))
 @media (max-width: 600px) {
   .clock-time { font-size: 56px; }
   .clock-card { padding: 28px 32px 24px; }
-  .clock-section { padding-top: 48px; }
+  .header-block { margin-top: 48px; }
   .launcher-grid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 20px 12px; }
   .tool-icon-wrap { width: 64px; height: 64px; border-radius: 16px; }
   .tool-icon { font-size: 30px; }
