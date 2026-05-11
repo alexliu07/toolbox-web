@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, onUnmounted, inject} from 'vue'
 
 const authFetch = inject('authFetch')
 
