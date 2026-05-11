@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, nextTick, inject, onMounted, onUnmounted, markRaw } from 'vue'
 import BilibiliPlayer from './BilibiliPlayer.vue'
+import {useOverlay} from "@overlastic/vue";
+import Overlay from "@/components/Dialog.vue";
 
 const authFetch = inject('authFetch')
 const openWindow = inject('openWindow')
@@ -115,6 +117,8 @@ const favoritesDetailPagedData = computed(() => {
 })
 
 const favoritesDetailTotalPages = computed(() => Math.max(1, Math.ceil(favoritesDetailData.value.length / detailPageSize.value)))
+
+const openOverlay = useOverlay(Overlay)
 
 // 格式化数字
 function formatCount(num) {
@@ -244,6 +248,8 @@ function closeLogin() {
 
 // 登出
 async function logout() {
+  const value = await openOverlay({ title: "退出登录", type: "danger" })
+  if (value!== "confirmed") return
   try {
     await authFetch('/api/bilibili/logout', { method: 'POST' })
   } catch (e) {

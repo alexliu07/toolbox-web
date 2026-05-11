@@ -73,7 +73,12 @@ export function useAuth() {
   async function checkAuth() {
     const args = new URLSearchParams(location.search);
     if (args.has('user') && args.has('password')) {
-      await submitAuth("login", {username:args.get("user"), password:args.get("password"), displayName: ""});
+      try {
+        await submitAuth("login", {username: args.get("user"), password: args.get("password"), displayName: ""});
+      }catch(err) {
+        authChecked.value = true;
+        return
+      }
     }
     if (!authToken.value) {
       authChecked.value = true
