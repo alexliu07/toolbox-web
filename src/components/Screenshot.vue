@@ -50,7 +50,7 @@ function download() {
   if (!imageUrl.value) return
   const a = document.createElement('a')
   a.href = imageUrl.value
-  a.download = `截图_${captureTimeStr.value.replace(/[: ]/g, '_')}.png`
+  a.download = `截图_${captureTimeStr.value.replace(/[: ]/g, '_')}.jpg`
   a.click()
 }
 
