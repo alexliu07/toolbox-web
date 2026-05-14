@@ -395,7 +395,10 @@ async function initNPlayer() {
 
     dp.value = player
     dp.value.on('play', () => { isPlaying.value = true })
-    dp.value.on('pause', () => { isPlaying.value = false })
+    dp.value.on('pause', () => {
+      isPlaying.value = false
+      reportProgress()
+    })
     dp.value.on('ended', () => { isPlaying.value = false })
 
     dashPlayerInstance = MediaPlayer().create()
@@ -474,6 +477,7 @@ async function initNPlayer() {
 
 // ── 切换分集 ──
 async function switchEpisode(index) {
+  reportProgress()
   if (index === currentPageIndex.value) return
   const page = props.pageList[index]
   if (!page) return
