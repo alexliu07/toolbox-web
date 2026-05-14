@@ -1,8 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onErrorCaptured, inject, markRaw, defineAsyncComponent } from 'vue'
 import FileViewer from './FileViewer.vue'
+import PDFViewer from './PDFViewer.vue'
 
 const FileViewerRaw = markRaw(FileViewer)
+const PDFViewerRaw  = markRaw(PDFViewer)
 const WordViewerRaw  = markRaw(defineAsyncComponent(() => import('./WordViewer.vue')))
 const ExcelViewerRaw = markRaw(defineAsyncComponent(() => import('./ExcelViewer.vue')))
 const PptxViewerRaw  = markRaw(defineAsyncComponent(() => import('./PptxViewer.vue')))
@@ -19,6 +21,7 @@ function mimeToIcon(mime) {
   if (mime?.startsWith('video/')) return '🎬'
   if (mime?.startsWith('audio/')) return '🎵'
   if (mime?.startsWith('text/'))  return '📝'
+  if (mime?.includes('pdf'))     return '📕'
   return '📄'
 }
 
@@ -61,6 +64,16 @@ function openFileViewer(fileUrl, fileName, mimeType, fileList = [], currentIndex
     component: FileViewerRaw,
     props: { fileUrl, fileName: shortName, mimeType, fileList, currentIndex,
              onNavigate: (i) => navigateFileViewer(winId, i) },
+  })
+}
+
+function openPDFViewer(fileUrl, fileName) {
+  const shortName = fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName
+  openWindow({
+    title: shortName,
+    icon: '📕', width: 900, height: 700,
+    component: PDFViewerRaw,
+    props: { fileUrl, fileName: shortName },
   })
 }
 
@@ -172,6 +185,7 @@ function isText(mime) {
 }
 function isVideo(mime) { return mime && mime.startsWith('video/') }
 function isAudio(mime) { return mime && mime.startsWith('audio/') }
+function isPDF(mime) { return mime && mime.includes('pdf') }
 
 // ── API calls ──
 async function fetchSharedFolders() {
@@ -326,6 +340,12 @@ async function openPreview(file) {
     fileUrl = `/api/shared-folders/${currentFolder.value}/raw/${filePath}`
   } else {
     fileUrl = rawUrl(file.name)
+  }
+
+  // Open PDF in PDF viewer
+  if (isPDF(file.mime)) {
+    openPDFViewer(fileUrl, file.name)
+    return
   }
 
   // Open Word documents in word viewer
