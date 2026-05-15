@@ -28,7 +28,6 @@ if (currentPageIndex.value < 0) currentPageIndex.value = 0
 const currentEpId = ref(props.pageList[currentPageIndex.value]?.id || props.epId || 0)
 const streamUrl = ref('')
 const loadingStream = ref(true)
-const isPlaying = ref(false)
 const playerContainerRef = ref(null)
 let dp = shallowRef(null)
 let dashPlayerInstance = null
@@ -311,8 +310,6 @@ function initHlsPlayer(url) {
       plugins: [danmaku]
     })
     dp.value = player
-    dp.value.on('play', () => { isPlaying.value = true })
-    dp.value.on('pause', () => { isPlaying.value = false })
 
     if (Hls.isSupported()) {
       hlsInstance = new Hls({
@@ -394,12 +391,9 @@ async function initNPlayer() {
     })
 
     dp.value = player
-    dp.value.on('play', () => { isPlaying.value = true })
-    dp.value.on('pause', () => {
-      isPlaying.value = false
+    dp.value.on('Pause', () => {
       reportProgress()
     })
-    dp.value.on('ended', () => { isPlaying.value = false })
 
     dashPlayerInstance = MediaPlayer().create()
     dashPlayerInstance.initialize(dp.value.video, streamUrl.value, true)
@@ -487,7 +481,6 @@ async function switchEpisode(index) {
   danmakuOid.value = page.cid
   pendingSeekTime.value = null
   loadingStream.value = true
-  isPlaying.value = false
   if (dashPlayerInstance) { dashPlayerInstance.reset(); dashPlayerInstance = null }
   if (dp.value) { dp.value.dispose(); dp.value = null }
   await fetchStreamUrl()
