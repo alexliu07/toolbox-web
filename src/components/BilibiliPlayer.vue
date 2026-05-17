@@ -72,10 +72,14 @@ const commentPage = ref(1)
 const commentTotal = ref(0)
 const commentSort = ref(1) // 0=时间 1=点赞 2=回复
 const commentsLoading = ref(false)
-const commentPageSize = 20
+const commentPageSize = 5
 
-// 回复查看状态: Map<rpid, { replies, page, total, loading }>
+// 评论回复状态: Map<rpid, { replies, page, total, loading }>
 const replyViewState = ref(new Map())
+
+// 图片放大预览
+const lightboxUrl = ref('')
+const lightboxVisible = ref(false)
 
 // ── 评论 ──
 async function fetchComments() {
@@ -118,6 +122,11 @@ function formatCommentTime(ctime) {
   if (diff < 2592000) return `${Math.floor(diff / 86400)}天前`
   const d = new Date(ctime * 1000)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function openLightbox(url) {
+  lightboxUrl.value = url
+  lightboxVisible.value = true
 }
 
 function getReplyState(rpid) {
@@ -743,7 +752,7 @@ onUnmounted(() => {
                     </div>
                     <div class="comment-content">{{ reply.content?.message }}</div>
                     <div v-if="reply.content?.pictures?.length" class="comment-images">
-                      <img v-for="(pic, pi) in reply.content.pictures" :key="pi" :src="`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`" class="comment-img" @click="window.open(`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`, '_blank')" />
+                      <img v-for="(pic, pi) in reply.content.pictures" :key="pi" :src="`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`" class="comment-img" @click="openLightbox(`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`)" />
                     </div>
                     <div class="comment-meta">
                       <span class="comment-like">
@@ -915,6 +924,13 @@ onUnmounted(() => {
         </template>
       </div>
     </template>
+    <!-- 图片放大预览 -->
+    <div v-if="lightboxVisible" class="lightbox-overlay" @click="lightboxVisible = false">
+      <img :src="lightboxUrl" class="lightbox-img" @click.stop />
+      <button class="lightbox-close" @click="lightboxVisible = false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -1728,5 +1744,45 @@ onUnmounted(() => {
 .comment-page-info {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.45);
+}
+
+/* 图片放大预览 */
+.lightbox-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.lightbox-img {
+  max-width: 90%;
+  max-height: 90%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>
