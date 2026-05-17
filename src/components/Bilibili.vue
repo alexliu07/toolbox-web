@@ -51,6 +51,10 @@ const totalPages = computed(() => Math.max(1, Math.ceil(searchTotal.value / page
 const currentVideo = ref(null)
 const currentBvid = ref('')
 
+// buvid（内存中保存）
+const buvid3 = ref('')
+const buvid4 = ref('')
+
 // 登录状态
 const bilibiliUser = ref(null)
 const showLogin = ref(false)
@@ -171,9 +175,33 @@ function proxyAvatar(url) {
 }
 
 // 检查登录状态
+// 获取 buvid3 / buvid4
+async function fetchBuvid() {
+  try {
+    const res = await authFetch('/api/bilibili/buvid')
+    const data = await res.json()
+    if (data.code === 0 && data.data) {
+      buvid3.value = data.data.buvid3
+      buvid4.value = data.data.buvid4
+    }
+  } catch (e) {
+    console.warn('[bilibili] buvid fetch failed:', e)
+  }
+}
+
+// 带buvid3的请求封装
+function biliFetch(url, options = {}) {
+  const buvid = buvid3.value
+  if (!buvid) return authFetch(url, options)
+  // 将 buvid3 拼入 URL query
+  const sep = url.includes('?') ? '&' : '?'
+  const fullUrl = `${url}${sep}buvid3=${encodeURIComponent(buvid)}`
+  return authFetch(fullUrl, options)
+}
+
 async function checkLoginStatus() {
   try {
-    const res = await authFetch('/api/bilibili/login/status')
+    const res = await biliFetch('/api/bilibili/login/status')
     const data = await res.json()
     if (data.loggedIn) {
       bilibiliUser.value = { mid: data.mid, nickname: data.nickname, avatar_url: data.avatar_url }
@@ -191,7 +219,7 @@ async function startLogin() {
   qrStatus.value = 'loading'
   qrCode.value = ''
   try {
-    const res = await authFetch('/api/bilibili/login/qr/generate')
+    const res = await biliFetch('/api/bilibili/login/qr/generate')
     const data = await res.json()
     if (data.qrimg) {
       qrCode.value = data.qrimg
@@ -212,7 +240,7 @@ function startQrPoll(qrcodeKey) {
   if (qrPollTimer) clearInterval(qrPollTimer)
   qrPollTimer = setInterval(async () => {
     try {
-      const res = await authFetch(`/api/bilibili/login/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`)
+      const res = await biliFetch(`/api/bilibili/login/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`)
       const data = await res.json()
       if (data.code === 0) {
         // 登录成功
@@ -251,7 +279,7 @@ async function logout() {
   const value = await openOverlay({ title: "退出登录", type: "danger" })
   if (value!== "confirmed") return
   try {
-    await authFetch('/api/bilibili/logout', { method: 'POST' })
+    await biliFetch('/api/bilibili/logout', { method: 'POST' })
   } catch (e) {
     console.warn('Logout error:', e)
   }
@@ -269,7 +297,7 @@ async function search() {
   localPage.value = 1
   apiPage.value = 1
   try {
-    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=1&search_type=${searchType.value}`)
+    const res = await biliFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=1&search_type=${searchType.value}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.result) {
       allResults.value = filterSearchResults(data.data.result)
@@ -299,7 +327,7 @@ async function fetchApiPage(page) {
   if (!q) return
   loading.value = true
   try {
-    const res = await authFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${page}&search_type=${searchType.value}`)
+    const res = await biliFetch(`/api/bilibili/search?keyword=${encodeURIComponent(q)}&page=${page}&search_type=${searchType.value}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.result) {
       const more = filterSearchResults(data.data.result)
@@ -341,7 +369,7 @@ async function playBangumi(item) {
   const seasonId = item.season_id
   if (!seasonId) return
   try {
-    const res = await authFetch(`/api/bilibili/pagelist?season_id=${seasonId}`)
+    const res = await biliFetch(`/api/bilibili/pagelist?season_id=${seasonId}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.length) {
       const firstEp = data.data[0]
@@ -398,6 +426,7 @@ async function playLive(item) {
       isLoggedIn: !!bilibiliUser.value,
       isLive: true,
       roomId: parseInt(roomId),
+      buvid3: buvid3.value,
     },
   })
 }
@@ -414,7 +443,7 @@ const recommendTotalPages = computed(() => Math.max(1, Math.ceil(recommendData.v
 async function fetchRecommend() {
   recommendLoading.value = true
   try {
-    const res = await authFetch(`/api/bilibili/recommend?fresh_idx=${recommendFreshIdx.value}&ps=30`)
+    const res = await biliFetch(`/api/bilibili/recommend?fresh_idx=${recommendFreshIdx.value}&ps=30`)
     const data = await res.json()
     if (data.code === 0 && data.data?.item) {
       // 过滤出普通视频（排除直播、OGV等）
@@ -499,7 +528,7 @@ async function fetchHistory() {
     if (cursor.business) params.set('business', cursor.business)
     if (cursor.view_at) params.set('view_at', cursor.view_at)
 
-    const res = await authFetch(`/api/bilibili/history?${params.toString()}`)
+    const res = await biliFetch(`/api/bilibili/history?${params.toString()}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
       allHistoryResults.value = [...allHistoryResults.value, ...data.data.list]
@@ -567,7 +596,7 @@ const toviewTotalPages = computed(() => Math.max(1, Math.ceil(toviewCount.value 
 async function fetchToview() {
   toviewLoading.value = true
   try {
-    const res = await authFetch('/api/bilibili/toview')
+    const res = await biliFetch('/api/bilibili/toview')
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
       toviewData.value = data.data.list
@@ -604,7 +633,7 @@ function toviewToVideo(item) {
 async function fetchFavorites() {
   favoritesLoading.value = true
   try {
-    const res = await authFetch('/api/bilibili/favorites')
+    const res = await biliFetch('/api/bilibili/favorites')
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
       favoritesData.value = data.data.list
@@ -642,7 +671,7 @@ async function fetchFavoritesDetail() {
   favoritesDetailLoading.value = true
   try {
     const pn = Math.ceil(favoritesDetailData.value.length / 20) + 1
-    const res = await authFetch(`/api/bilibili/favorites/detail?media_id=${currentFolder.value.id}&pn=${pn}&ps=20`)
+    const res = await biliFetch(`/api/bilibili/favorites/detail?media_id=${currentFolder.value.id}&pn=${pn}&ps=20`)
     const data = await res.json()
     if (data.code === 0 && data.data?.medias) {
       const videos = data.data.medias.filter(m => m.type === 2 && m.attr === 0)
@@ -710,7 +739,7 @@ function formatProgress(progress, duration) {
 async function addToToview(aid, event) {
   event.stopPropagation()
   try {
-    const res = await authFetch('/api/bilibili/toview/add', {
+    const res = await biliFetch('/api/bilibili/toview/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ aid })
@@ -750,7 +779,7 @@ async function playVideo(video) {
   let pageList = video.pageList
   if (!pageList) {
     try {
-      const cidRes = await authFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
+      const cidRes = await biliFetch(`/api/bilibili/pagelist?bvid=${encodeURIComponent(video.bvid)}`)
       const cidData = await cidRes.json()
       if (cidData.code !== 0 || !cidData.data?.length) throw new Error('获取视频信息失败')
       pageList = cidData.data
@@ -778,6 +807,7 @@ async function playVideo(video) {
       isBangumi: video.isBangumi || false,
       epId: video.epId || 0,
       seasonId: video.seasonId || 0,
+      buvid3: buvid3.value,
     },
   })
 }
@@ -785,6 +815,7 @@ async function playVideo(video) {
 onMounted(() => {
   checkLoginStatus()
   fetchRecommend()
+  fetchBuvid()
   nextTick(() => {
     if (resultsRef.value) {
       resultsHeight.value = resultsRef.value.getBoundingClientRect().height

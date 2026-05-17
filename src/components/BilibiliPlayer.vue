@@ -17,9 +17,19 @@ const props = defineProps({
   seasonId: { type: Number, default: 0 },
   isLive: { type: Boolean, default: false },
   roomId: { type: Number, default: 0 },
+  buvid3: { type: String, default: '' },
 })
 
 const authFetch = inject('authFetch')
+
+// 带buvid3的请求封装
+function biliFetch(url, options = {}) {
+  const buvid = props.buvid3
+  if (!buvid) return authFetch(url, options)
+  const sep = url.includes('?') ? '&' : '?'
+  const fullUrl = `${url}${sep}buvid3=${encodeURIComponent(buvid)}`
+  return authFetch(fullUrl, options)
+}
 
 // 播放器状态
 const currentCid = ref(props.initialCid || (props.pageList[0]?.cid ?? 0))
@@ -92,7 +102,7 @@ function proxyAvatar(url) {
 // ── 数据获取 ──
 async function fetchVideoInfo() {
   try {
-    const res = await authFetch(`/api/bilibili/videoinfo?bvid=${encodeURIComponent(props.bvid)}`)
+    const res = await biliFetch(`/api/bilibili/videoinfo?bvid=${encodeURIComponent(props.bvid)}`)
     const data = await res.json()
     if (data.code === 0) {
       videoInfo.value = data.data
@@ -104,7 +114,7 @@ async function fetchVideoInfo() {
 
 async function fetchActionStatus() {
   try {
-    const res = await authFetch(`/api/bilibili/fav/status?aid=${props.aid}`)
+    const res = await biliFetch(`/api/bilibili/fav/status?aid=${props.aid}`)
     const data = await res.json()
     if (data.code === 0) isFaved.value = data.data?.favoured || false
   } catch (e) {
@@ -115,7 +125,7 @@ async function fetchActionStatus() {
 async function fetchBangumiInfo() {
   if (!props.seasonId) return
   try {
-    const res = await authFetch(`/api/bilibili/bangumi-info?season_id=${props.seasonId}`)
+    const res = await biliFetch(`/api/bilibili/bangumi-info?season_id=${props.seasonId}`)
     const data = await res.json()
     if (data.code === 0) {
       bangumiInfo.value = data.data
@@ -131,7 +141,7 @@ async function toggleFollow() {
   actionLoading.value = true
   try {
     const endpoint = isFollowed.value ? '/api/bilibili/bangumi/unfollow' : '/api/bilibili/bangumi/follow'
-    const res = await authFetch(endpoint, {
+    const res = await biliFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ season_id: props.seasonId })
@@ -150,8 +160,8 @@ async function fetchLiveInfo() {
   if (!props.roomId) return
   try {
     const [roomRes, anchorRes] = await Promise.all([
-      authFetch(`/api/bilibili/live-info?room_id=${props.roomId}`),
-      authFetch(`/api/bilibili/live-anchor?roomid=${props.roomId}`),
+      biliFetch(`/api/bilibili/live-info?room_id=${props.roomId}`),
+      biliFetch(`/api/bilibili/live-anchor?roomid=${props.roomId}`),
     ])
     const roomData = await roomRes.json()
     const anchorData = await anchorRes.json()
@@ -168,7 +178,7 @@ async function openFavModal() {
   selectedFolderIds.value = new Set()
   originalFavIds.value = new Set()
   try {
-    const res = await authFetch(`/api/bilibili/favorites?rid=${props.aid}`)
+    const res = await biliFetch(`/api/bilibili/favorites?rid=${props.aid}`)
     const data = await res.json()
     if (data.code === 0 && data.data?.list) {
       favFolders.value = data.data.list
@@ -197,7 +207,7 @@ async function confirmFav() {
   const addIds = Array.from(selectedFolderIds.value).filter(id => !originalFavIds.value.has(id))
   const delIds = Array.from(originalFavIds.value).filter(id => !selectedFolderIds.value.has(id))
   try {
-    const res = await authFetch('/api/bilibili/fav', {
+    const res = await biliFetch('/api/bilibili/fav', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -242,7 +252,7 @@ async function fetchStreamUrl() {
     } else {
       fetchUrl = `/api/bilibili/mpd?bvid=${encodeURIComponent(props.bvid)}&cid=${currentCid.value}`
     }
-    const response = await authFetch(fetchUrl)
+    const response = await biliFetch(fetchUrl)
     const lastPlayTime = response.headers.get('X-Last-Play-Time')
     if (lastPlayTime) {
       pendingSeekTime.value = parseInt(lastPlayTime) / 1000
@@ -269,7 +279,7 @@ async function fetchStreamUrl() {
 async function fetchLiveStream() {
   if (!props.roomId) return
   try {
-    const res = await authFetch(`/api/bilibili/live-stream?room_id=${props.roomId}`)
+    const res = await biliFetch(`/api/bilibili/live-stream?room_id=${props.roomId}`)
     const data = await res.json()
     if (data.code !== 0 || !data.data?.streams?.length) {
       loadingStream.value = false
@@ -358,7 +368,7 @@ async function initNPlayer() {
     let danmakuItems = []
     if (danmakuOid.value) {
       try {
-        const res = await authFetch(`/api/bilibili/danmaku/?id=${danmakuOid.value}`)
+        const res = await biliFetch(`/api/bilibili/danmaku/?id=${danmakuOid.value}`)
         const data = await res.json()
         if (data.code === 0 && Array.isArray(data.data)) {
           danmakuItems = data.data.map(([time, type, color, , text]) => ({
@@ -492,7 +502,7 @@ function reportProgress() {
     const video = dp.value?.video
     if (video && props.aid && currentCid.value) {
       const progress = Math.floor(video.currentTime)
-      authFetch('/api/bilibili/report', {
+      biliFetch('/api/bilibili/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ aid: props.aid, cid: parseInt(currentCid.value), progress })

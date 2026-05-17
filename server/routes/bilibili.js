@@ -16,7 +16,6 @@ function escapeXml(str) {
 }
 
 // 弹幕内存缓存 (参考 DPlayer-node)
-const danmakuCache = new Map()
 
 // WBI 签名相关配置
 let wbiKeys = {
@@ -88,16 +87,22 @@ async function fetchWbiKeys() {
   }
 }
 
-// 获取用户 Bilibili cookie 字符串
-function getCookiesString(userId) {
-  if (!userId) return undefined
-  try {
-    const cred = getBilibiliCredentials(userId)
-    if (!cred?.cookies) return undefined
-    return Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
-  } catch {
-    return undefined
+// 获取用户 Bilibili cookie 字符串，可额外注入 buvid3
+function getCookiesString(userId, buvid3) {
+  let cookieStr = ''
+  if (userId) {
+    try {
+      const cred = getBilibiliCredentials(userId)
+      if (cred?.cookies) {
+        cookieStr = Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+      }
+    } catch {}
   }
+  // 无论是否登录，都注入 buvid3
+  if (buvid3) {
+    cookieStr = cookieStr ? `${cookieStr}; buvid3=${buvid3}` : `buvid3=${buvid3}`
+  }
+  return cookieStr || undefined
 }
 
 // 通用 HTTP 请求函数
@@ -181,6 +186,21 @@ function fetchUrl(targetUrl, params, options = {}) {
     req.end()
   })
 }
+
+// GET /buvid — 获取 buvid3 / buvid4
+router.get('/buvid', async (req, res) => {
+  try {
+    const data = await fetchUrl('https://api.bilibili.com/x/frontend/finger/spi', {})
+    if (data?.code === 0 && data.data?.b_3 && data.data?.b_4) {
+      res.json({ code: 0, data: { buvid3: data.data.b_3, buvid4: data.data.b_4 } })
+    } else {
+      res.status(502).json({ code: -502, message: data?.message || 'buvid fetch failed' })
+    }
+  } catch (e) {
+    console.error('Buvid fetch error:', e.message)
+    res.status(502).json({ code: -502, message: e.message })
+  }
+})
 
 // ── 登录相关端点 ──
 
@@ -340,7 +360,7 @@ router.get('/search', optionalAuth, async (req, res) => {
       wbiParams.order = 'online'
     }
     const params = signWBI(wbiParams)
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', params, cookieStr ? { cookies: cookieStr } : {})
 
     // live搜索返回的是 { result: { live_room: [...], live_user: [...] } }
@@ -365,7 +385,7 @@ router.get('/pagelist', optionalAuth, async (req, res) => {
     if (!bvid && !season_id) {
       return res.status(400).json({ code: -400, message: 'bvid or season_id is required' })
     }
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     if (season_id) {
       // 番剧分集信息
       const data = await fetchUrl('https://api.bilibili.com/pgc/view/web/season', { season_id }, cookieStr ? { cookies: cookieStr } : {})
@@ -398,7 +418,7 @@ router.get('/videoinfo', optionalAuth, async (req, res) => {
     if (!bvid) {
       return res.status(400).json({ code: -400, message: 'bvid is required' })
     }
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/view', { bvid }, cookieStr ? { cookies: cookieStr } : {})
     if (data.code !== 0) {
       return res.json({ code: data.code, message: data.message || 'videoinfo error' })
@@ -446,7 +466,7 @@ router.get('/mpd', optionalAuth, async (req, res) => {
       fourk: 1,
       fnver: 0,
     })
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/x/player/wbi/playurl', params, cookieStr ? { cookies: cookieStr } : {})
 
     if (data.code !== 0) {
@@ -552,7 +572,7 @@ router.get('/bangumi-mpd', optionalAuth, async (req, res) => {
     if (avid) params.avid = parseInt(avid)
     if (ep_id) params.ep_id = parseInt(ep_id)
 
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/pgc/player/web/playurl', params, cookieStr ? { cookies: cookieStr } : {})
 
     if (data.code !== 0) {
@@ -649,7 +669,7 @@ router.get('/bangumi-info', optionalAuth, async (req, res) => {
   try {
     const { season_id } = req.query
     if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/pgc/view/web/season', { season_id }, cookieStr ? { cookies: cookieStr } : {})
     if (data.code !== 0) return res.json({ code: data.code, message: data.message })
     const r = data.result || data.data
@@ -678,9 +698,9 @@ router.post('/bangumi/follow', optionalAuth, async (req, res) => {
   try {
     const { season_id } = req.body
     if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const cred = getBilibiliCredentials(req.user?.id)
+    if (!cred?.cookies) return res.json({ code: -101, message: '账号未登录' })
     const csrf = cred?.cookies?.bili_jct || ''
     const params = new URLSearchParams({ season_id: String(season_id), csrf })
     const data = await fetchUrl('https://api.bilibili.com/pgc/web/follow/add', {}, {
@@ -700,9 +720,9 @@ router.post('/bangumi/unfollow', optionalAuth, async (req, res) => {
   try {
     const { season_id } = req.body
     if (!season_id) return res.status(400).json({ code: -400, message: 'season_id is required' })
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const cred = getBilibiliCredentials(req.user?.id)
+    if (!cred?.cookies) return res.json({ code: -101, message: '账号未登录' })
     const csrf = cred?.cookies?.bili_jct || ''
     const params = new URLSearchParams({ season_id: String(season_id), csrf })
     const data = await fetchUrl('https://api.bilibili.com/pgc/web/follow/del', {}, {
@@ -896,7 +916,7 @@ router.get('/stream', optionalAuth, async (req, res) => {
     const urlObj = new URL(targetUrl)
     const isHttps = urlObj.protocol === 'https:'
     const httpModule = isHttps ? https : http
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const rangeHeader = req.headers['range']
 
     function makeRequest(includeRange) {
@@ -1061,8 +1081,8 @@ router.get('/danmaku/', async (req, res) => {
 // 获取历史记录列表（游标分页）
 router.get('/history', optionalAuth, async (req, res) => {
   try {
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) {
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    if (!req.user?.id || !getBilibiliCredentials(req.user?.id)?.cookies) {
       return res.json({ code: -101, message: '账号未登录' })
     }
 
@@ -1096,7 +1116,7 @@ router.get('/recommend', optionalAuth,async (req, res) => {
       brush: freshIdxNum,
       fetch_row: freshIdxNum * psNum,
     })
-    const cookieStr = getCookiesString(req.user?.id)
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const data = await fetchUrl('https://api.bilibili.com/x/web-interface/wbi/index/top/feed/rcmd', params, cookieStr ? { cookies: cookieStr } : {})
     res.json(data)
   } catch (e) {
@@ -1108,8 +1128,8 @@ router.get('/recommend', optionalAuth,async (req, res) => {
 // 获取稍后再看列表
 router.get('/toview', optionalAuth, async (req, res) => {
   try {
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) {
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    if (!req.user?.id || !getBilibiliCredentials(req.user?.id)?.cookies) {
       return res.json({ code: -101, message: '账号未登录' })
     }
 
@@ -1126,9 +1146,9 @@ router.post('/toview/add', optionalAuth, async (req, res) => {
   try {
     const { aid } = req.body
     if (!aid) return res.status(400).json({ code: -400, message: 'aid is required' })
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const cred = getBilibiliCredentials(req.user?.id)
+    if (!cred?.cookies) return res.json({ code: -101, message: '账号未登录' })
     const csrf = cred?.cookies?.bili_jct || ''
     const params = new URLSearchParams({ aid: String(aid), csrf })
     const data = await fetchUrl('https://api.bilibili.com/x/v2/history/toview/add', {}, {
@@ -1146,8 +1166,8 @@ router.post('/toview/add', optionalAuth, async (req, res) => {
 // 获取用户收藏夹列表
 router.get('/favorites', optionalAuth, async (req, res) => {
   try {
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) {
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    if (!req.user?.id || !getBilibiliCredentials(req.user?.id)?.cookies) {
       return res.json({ code: -101, message: '账号未登录' })
     }
 
@@ -1172,8 +1192,8 @@ router.get('/favorites', optionalAuth, async (req, res) => {
 // 获取收藏夹内容列表
 router.get('/favorites/detail', optionalAuth, async (req, res) => {
   try {
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) {
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    if (!req.user?.id || !getBilibiliCredentials(req.user?.id)?.cookies) {
       return res.json({ code: -101, message: '账号未登录' })
     }
 
@@ -1202,8 +1222,9 @@ router.get('/fav/status', optionalAuth, async (req, res) => {
   try {
     const { aid } = req.query
     if (!aid) return res.status(400).json({ code: -400, message: 'aid is required' })
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    const cred = getBilibiliCredentials(req.user?.id)
+    if (!cred?.cookies) return res.json({ code: -101, message: '账号未登录' })
     const data = await fetchUrl('https://api.bilibili.com/x/v2/fav/video/favoured', { aid }, { cookies: cookieStr })
     res.json(data)
   } catch (e) {
@@ -1217,9 +1238,9 @@ router.post('/fav', optionalAuth, async (req, res) => {
   try {
     const { rid, add_media_ids = '', del_media_ids = '' } = req.body
     if (!rid) return res.status(400).json({ code: -400, message: 'rid is required' })
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) return res.json({ code: -101, message: '账号未登录' })
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
     const cred = getBilibiliCredentials(req.user?.id)
+    if (!cred?.cookies) return res.json({ code: -101, message: '账号未登录' })
     const csrf = cred?.cookies?.bili_jct || ''
     const params = new URLSearchParams({
       rid: String(rid), type: '2',
@@ -1247,8 +1268,8 @@ router.post('/report', optionalAuth, async (req, res) => {
       return res.status(400).json({ code: -400, message: 'aid and cid are required' })
     }
 
-    const cookieStr = getCookiesString(req.user?.id)
-    if (!cookieStr) {
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    if (!req.user?.id || !getBilibiliCredentials(req.user?.id)?.cookies) {
       return res.json({ code: -101, message: 'not logged in' })
     }
 
