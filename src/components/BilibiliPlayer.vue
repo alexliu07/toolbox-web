@@ -70,7 +70,7 @@ const sidebarTab = ref('info')
 const comments = ref([])
 const commentPage = ref(1)
 const commentTotal = ref(0)
-const commentSort = ref(0) // 0=时间 1=点赞 2=回复
+const commentSort = ref(1) // 0=时间 1=点赞 2=回复
 const commentsLoading = ref(false)
 const commentPageSize = 20
 
