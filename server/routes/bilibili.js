@@ -1592,4 +1592,29 @@ router.get('/comments', optionalAuth, async (req, res) => {
   }
 })
 
+// 评论回复代理
+router.get('/comments/reply', optionalAuth, async (req, res) => {
+  try {
+    const { type, oid, root, pn, ps } = req.query
+    if (!oid || !root) {
+      return res.status(400).json({ code: -400, message: 'oid and root are required' })
+    }
+    const cookieStr = getCookiesString(req.user?.id, req.query.buvid3)
+    const params = {
+      type: type || 1,
+      oid: String(oid),
+      root: String(root),
+      pn: pn || 1,
+      ps: ps || 20,
+    }
+    const data = await fetchUrl('https://api.bilibili.com/x/v2/reply/reply', params, {
+      cookies: cookieStr
+    })
+    res.json(data)
+  } catch (e) {
+    console.error('Bilibili comments reply error:', e.message)
+    res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
 export default router

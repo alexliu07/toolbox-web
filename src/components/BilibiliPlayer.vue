@@ -74,6 +74,9 @@ const commentSort = ref(0) // 0=时间 1=点赞 2=回复
 const commentsLoading = ref(false)
 const commentPageSize = 20
 
+// 回复查看状态: Map<rpid, { replies, page, total, loading }>
+const replyViewState = ref(new Map())
+
 // ── 评论 ──
 async function fetchComments() {
   if (!props.aid) return
@@ -115,6 +118,56 @@ function formatCommentTime(ctime) {
   if (diff < 2592000) return `${Math.floor(diff / 86400)}天前`
   const d = new Date(ctime * 1000)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function getReplyState(rpid) {
+  return replyViewState.value.get(rpid) || null
+}
+
+async function toggleReplyView(comment) {
+  const rpid = comment.rpid
+  if (replyViewState.value.has(rpid)) {
+    replyViewState.value.delete(rpid)
+    replyViewState.value = new Map(replyViewState.value) // trigger reactivity
+    return
+  }
+  const state = { replies: [], page: 1, total: comment.count || 0, loading: true }
+  replyViewState.value.set(rpid, state)
+  replyViewState.value = new Map(replyViewState.value)
+  await fetchReplies(rpid, state)
+}
+
+async function fetchReplies(rpid, state) {
+  state.loading = true
+  replyViewState.value = new Map(replyViewState.value)
+  try {
+    const res = await biliFetch(`/api/bilibili/comments/reply?type=1&oid=${props.aid}&root=${rpid}&pn=${state.page}&ps=20`)
+    const data = await res.json()
+    if (data.code === 0 && data.data) {
+      state.replies = data.data.replies || []
+      state.total = data.data.page?.count || 0
+    } else {
+      state.replies = []
+    }
+  } catch (e) {
+    console.warn('Failed to fetch replies:', e)
+    state.replies = []
+  }
+  state.loading = false
+  replyViewState.value = new Map(replyViewState.value)
+}
+
+function replyTotalPages(rpid) {
+  const state = replyViewState.value.get(rpid)
+  if (!state) return 1
+  return Math.ceil(state.total / 20) || 1
+}
+
+async function replyChangePage(rpid, delta) {
+  const state = replyViewState.value.get(rpid)
+  if (!state) return
+  state.page += delta
+  await fetchReplies(rpid, state)
 }
 
 const showFavModal = ref(false)
@@ -697,9 +750,38 @@ onUnmounted(() => {
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
                         {{ formatCount(reply.like) }}
                       </span>
-                      <span v-if="reply.count" class="comment-reply-count">{{ reply.count }}回复</span>
+                      <button v-if="reply.count" class="comment-reply-btn" @click="toggleReplyView(reply)">
+                        {{ getReplyState(reply.rpid) ? '收起回复' : `${reply.count}条回复` }}
+                      </button>
                       <span v-if="reply.floor" class="comment-floor">#{{ reply.floor }}</span>
                     </div>
+                    <!-- 回复展开区域 -->
+                    <template v-if="getReplyState(reply.rpid)">
+                      <div v-if="getReplyState(reply.rpid).loading" class="reply-loading">加载回复...</div>
+                      <template v-else>
+                        <div class="reply-list">
+                          <div v-for="sub in getReplyState(reply.rpid).replies" :key="sub.rpid" class="reply-item">
+                            <img :src="proxyAvatar(sub.member?.avatar)" class="reply-avatar" />
+                            <div class="reply-body">
+                              <div class="reply-header">
+                                <span class="reply-name">{{ sub.member?.uname }}</span>
+                                <span class="reply-time">{{ formatCommentTime(sub.ctime) }}</span>
+                              </div>
+                              <div class="reply-content">{{ sub.content?.message }}</div>
+                              <span class="reply-like">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                                {{ formatCount(sub.like) }}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div v-if="replyTotalPages(reply.rpid) > 1" class="reply-pagination">
+                          <button class="reply-page-btn" :disabled="getReplyState(reply.rpid).page <= 1" @click="replyChangePage(reply.rpid, -1)">上一页</button>
+                          <span class="reply-page-info">{{ getReplyState(reply.rpid).page }} / {{ replyTotalPages(reply.rpid) }}</span>
+                          <button class="reply-page-btn" :disabled="getReplyState(reply.rpid).page >= replyTotalPages(reply.rpid)" @click="replyChangePage(reply.rpid, 1)">下一页</button>
+                        </div>
+                      </template>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -1491,6 +1573,120 @@ onUnmounted(() => {
 .comment-floor {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.25);
+}
+
+.comment-reply-btn {
+  font-size: 11px;
+  color: rgba(0, 161, 214, 0.6);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.comment-reply-btn:hover {
+  color: rgba(0, 161, 214, 0.9);
+}
+
+/* 回复列表 */
+.reply-loading {
+  padding: 8px 0 4px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+
+.reply-list {
+  margin-top: 8px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.reply-item {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.reply-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.reply-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.reply-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.reply-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+}
+
+.reply-time {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.reply-content {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.5;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.reply-like {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  margin-top: 2px;
+}
+
+.reply-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 0;
+  margin-top: 4px;
+}
+
+.reply-page-btn {
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+
+.reply-page-btn:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.reply-page-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.reply-page-info {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
 }
 
 /* 评论翻页 */
