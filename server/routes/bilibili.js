@@ -89,22 +89,25 @@ async function fetchWbiKeys() {
   }
 }
 
-// 获取用户 Bilibili cookie 字符串，可额外注入 buvid3
+// 获取用户 Bilibili cookie 字符串，可额外注入/替换 buvid3
 function getCookiesString(userId, buvid3) {
-  let cookieStr = ''
+  const parts = []
   if (userId) {
     try {
       const cred = getBilibiliCredentials(userId)
       if (cred?.cookies) {
-        cookieStr = Object.entries(cred.cookies).map(([k, v]) => `${k}=${v}`).join('; ')
+        for (const [k, v] of Object.entries(cred.cookies)) {
+          if (k === 'buvid3' && buvid3) continue // 跳过旧的 buvid3，后面用新值替换
+          parts.push(`${k}=${v}`)
+        }
       }
     } catch {}
   }
-  // 无论是否登录，都注入 buvid3
+  // 无论是否登录，都注入 buvid3（替换旧值或新增）
   if (buvid3) {
-    cookieStr = cookieStr ? `${cookieStr}; buvid3=${buvid3}` : `buvid3=${buvid3}`
+    parts.push(`buvid3=${buvid3}`)
   }
-  return cookieStr || undefined
+  return parts.length ? parts.join('; ') : undefined
 }
 
 // 通用 HTTP 请求函数
