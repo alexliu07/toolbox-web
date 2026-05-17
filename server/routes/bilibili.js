@@ -401,7 +401,9 @@ class LiveDanmakuManager {
     this.#closed = true
     this.stopHeartbeat()
     if (this.#ws) {
-      this.#ws.removeAllListeners()
+      // 不移除监听器 — ws.close() 在 CONNECTING 状态会异步触发 error/close 事件，
+      // removeAllListeners 会导致这些事件无监听器而抛出 unhandled error。
+      // 已设置 #closed=true，现有监听器不会再触发重连，安全保留。
       this.#ws.close()
       this.#ws = null
     }
@@ -982,9 +984,9 @@ router.get('/live-stream', async (req, res) => {
     if (!room_id) return res.status(400).json({ code: -400, message: 'room_id is required' })
     const data = await fetchUrl('https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo', {
       room_id,
-      protocol: '0,1',
-      format: '0,1,2',
-      codec: '0,1',
+      protocol: '1',
+      format: '1',
+      codec: '0',
       qn: parseInt(qn),
       platform: 'web',
       ptype: 8,
