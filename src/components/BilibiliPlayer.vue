@@ -58,7 +58,10 @@ const isFollowed = ref(false)
 // 直播状态
 const liveInfo = ref(null)
 const anchorInfo = ref(null)
+const livePopularity = ref(0)
 let hlsInstance = null
+let liveDanmakuSource = null
+let danmakuCleanupTimer = null
 
 // 收藏夹弹窗
 const showFavModal = ref(false)
@@ -299,6 +302,7 @@ async function fetchLiveStream() {
     nextTick(() => {
       initHlsPlayer(proxyUrl)
       loadingStream.value = false
+      connectLiveDanmaku()
     })
   } catch (e) {
     console.error('Fetch live stream error:', e)
@@ -353,6 +357,58 @@ function initHlsPlayer(url) {
   } catch (e) {
     console.error('initHlsPlayer error:', e)
   }
+}
+
+// ── 直播弹幕 SSE 连接 ──
+function connectLiveDanmaku() {
+  if (!props.isLive || !props.roomId) return
+  if (liveDanmakuSource) { liveDanmakuSource.close(); liveDanmakuSource = null }
+
+  const authToken = localStorage.getItem('auth_token') || ''
+  const buvid = props.buvid3
+  const params = new URLSearchParams({ room_id: props.roomId })
+  if (buvid) params.set('buvid3', buvid)
+  if (authToken) params.set('token', authToken)
+
+  liveDanmakuSource = new EventSource(`/api/bilibili/live-danmaku?${params}`)
+
+  liveDanmakuSource.addEventListener('danmaku', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      if (dp.value?.danmaku) {
+        dp.value.danmaku.send({ text: data.text, color: data.color, type: data.type })
+      }
+    } catch {}
+  })
+
+  liveDanmakuSource.addEventListener('popularity', (e) => {
+    try {
+      const data = JSON.parse(e.data)
+      livePopularity.value = data.popularity
+    } catch {}
+  })
+
+  liveDanmakuSource.addEventListener('connected', (e) => {
+    console.log('[live-danmaku] SSE connected')
+  })
+
+  liveDanmakuSource.addEventListener('error', () => {
+    // EventSource 自动重连；致命错误时 readyState 变为 CLOSED
+  })
+
+  // 弹幕内存清理：每60秒清除旧弹幕
+  if (danmakuCleanupTimer) clearInterval(danmakuCleanupTimer)
+  danmakuCleanupTimer = setInterval(() => {
+    try {
+      const items = dp.value?.danmaku?.getItems()
+      if (items && items.length > 500) {
+        const current = dp.value.video?.currentTime || 0
+        const cutoff = current - 60
+        const filtered = items.filter(item => item.time >= cutoff)
+        dp.value.danmaku.resetItems(filtered)
+      }
+    } catch {}
+  }, 60000)
 }
 
 // ── 播放器 ──
@@ -526,6 +582,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (!props.isLive) reportProgress()
+  if (liveDanmakuSource) { liveDanmakuSource.close(); liveDanmakuSource = null }
+  if (danmakuCleanupTimer) { clearInterval(danmakuCleanupTimer); danmakuCleanupTimer = null }
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null }
   if (playerResizeObserver) { playerResizeObserver.disconnect(); playerResizeObserver = null }
   if (dashPlayerInstance) { dashPlayerInstance.reset(); dashPlayerInstance = null }
@@ -560,7 +618,7 @@ onUnmounted(() => {
             </div>
             <div class="info-title">{{ liveInfo?.title || cleanTitle(title) }}</div>
             <div class="info-stats">
-              <span v-if="liveInfo?.online" class="info-stat">{{ formatCount(liveInfo.online) }}人气</span>
+              <span class="info-stat">{{ formatCount(livePopularity || liveInfo?.online) }}人气</span>
               <span v-if="liveInfo?.area_name" class="info-stat">{{ liveInfo.area_name }}</span>
             </div>
             <div v-if="liveInfo?.description" class="info-desc-section">

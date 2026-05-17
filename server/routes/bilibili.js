@@ -4,6 +4,7 @@ import http from 'http'
 import crypto from 'crypto'
 import { URL } from 'url'
 import zlib from 'zlib'
+import WebSocket from 'ws'
 import { requireAuth, optionalAuth } from '../middleware/auth.js'
 import { getBilibiliCredentials, saveBilibiliCredentials, deleteBilibiliCredentials } from '../db.js'
 import QRCode from 'qrcode'
@@ -16,6 +17,7 @@ function escapeXml(str) {
 }
 
 // 弹幕内存缓存 (参考 DPlayer-node)
+const danmakuCache = new Map()
 
 // WBI 签名相关配置
 let wbiKeys = {
@@ -201,6 +203,207 @@ router.get('/buvid', async (req, res) => {
     res.status(502).json({ code: -502, message: e.message })
   }
 })
+
+// ── 直播弹幕代理 ──
+
+// 构造二进制数据包（16字节头 + 正文）
+function buildPacket(operation, body) {
+  const bodyBuf = typeof body === 'string' ? Buffer.from(body) : body
+  const header = Buffer.alloc(16)
+  header.writeUInt32BE(16 + bodyBuf.length, 0)  // total_size
+  header.writeUInt16BE(16, 4)                     // header_size
+  header.writeUInt16BE(1, 6)                      // proto_version (heartbeat/auth=1)
+  header.writeUInt32BE(operation, 8)              // operation
+  header.writeUInt32BE(1, 12)                     // sequence
+  return Buffer.concat([header, bodyBuf])
+}
+
+// 解析二进制包缓冲区（可能包含多个连续包）
+function parsePackets(buf) {
+  const packets = []
+  let offset = 0
+  while (offset + 16 <= buf.length) {
+    const totalSize = buf.readUInt32BE(offset)
+    const headerSize = buf.readUInt16BE(offset + 4)
+    const protoVer = buf.readUInt16BE(offset + 6)
+    const operation = buf.readUInt32BE(offset + 8)
+    if (totalSize < headerSize || offset + totalSize > buf.length) break
+    const body = buf.subarray(offset + headerSize, offset + totalSize)
+    packets.push({ protoVer, operation, body })
+    offset += totalSize
+  }
+  return packets
+}
+
+class LiveDanmakuManager {
+  #ws = null
+  #sseRes = null
+  #heartbeatTimer = null
+  #roomId = 0
+  #uid = 0
+  #token = ''
+  #hostInfo = null
+  #closed = false
+  #reconnectAttempts = 0
+  #maxReconnect = 3
+
+  constructor(roomId, uid, token, hostInfo, sseRes) {
+    this.#roomId = roomId
+    this.#uid = uid
+    this.#token = token
+    this.#hostInfo = hostInfo
+    this.#sseRes = sseRes
+  }
+
+  connect() {
+    const wsUrl = `wss://${this.#hostInfo.host}:${this.#hostInfo.wss_port}/sub`
+    console.log(`[live-danmaku] Connecting to ${wsUrl} for room ${this.#roomId}`)
+    this.#ws = new WebSocket(wsUrl)
+
+    this.#ws.on('open', () => {
+      console.log(`[live-danmaku] WS connected, sending auth for room ${this.#roomId}`)
+      this.sendAuth()
+    })
+
+    this.#ws.on('message', (data) => {
+      this.handleBuffer(data)
+    })
+
+    this.#ws.on('close', (code, reason) => {
+      console.log(`[live-danmaku] WS closed: code=${code}, reason=${reason}`)
+      this.stopHeartbeat()
+      if (!this.#closed && this.#reconnectAttempts < this.#maxReconnect) {
+        this.attemptReconnect()
+      }
+    })
+
+    this.#ws.on('error', (err) => {
+      console.error(`[live-danmaku] WS error: ${err.message}`)
+    })
+  }
+
+  sendAuth() {
+    const authBody = JSON.stringify({
+      uid: this.#uid,
+      roomid: this.#roomId,
+      protover: 3,
+      platform: 'web',
+      type: 2,
+      key: this.#token,
+    })
+    this.#ws.send(buildPacket(7, authBody))
+  }
+
+  startHeartbeat() {
+    this.stopHeartbeat()
+    const heartbeatPacket = buildPacket(2, '[object Object]')
+    this.#heartbeatTimer = setInterval(() => {
+      if (this.#ws?.readyState === WebSocket.OPEN) {
+        this.#ws.send(heartbeatPacket)
+      }
+    }, 30000)
+  }
+
+  stopHeartbeat() {
+    if (this.#heartbeatTimer) {
+      clearInterval(this.#heartbeatTimer)
+      this.#heartbeatTimer = null
+    }
+  }
+
+  handleBuffer(buf) {
+    const packets = parsePackets(buf)
+    for (const pkt of packets) {
+      switch (pkt.operation) {
+        case 3: // 心跳回复 → 人气值
+          if (pkt.body.length >= 4) {
+            const popularity = pkt.body.readUInt32BE(0)
+            this.sseSend('popularity', { popularity })
+          }
+          break
+        case 5: // 普通消息
+          this.handleNormalPacket(pkt.body, pkt.protoVer)
+          break
+        case 8: // 认证回复
+          console.log(`[live-danmaku] Auth success for room ${this.#roomId}`)
+          this.startHeartbeat()
+          break
+      }
+    }
+  }
+
+  handleNormalPacket(bodyBuf, protoVer) {
+    let dataBuf = bodyBuf
+    if (protoVer === 2) {
+      try { dataBuf = zlib.inflateSync(bodyBuf) } catch { return }
+    } else if (protoVer === 3) {
+      try { dataBuf = zlib.brotliDecompressSync(bodyBuf) } catch { return }
+    }
+    // 解压后可能包含多个子包，递归解析
+    if (protoVer === 2 || protoVer === 3) {
+      this.handleBuffer(dataBuf)
+      return
+    }
+    // protoVer === 0: 纯 JSON
+    try {
+      const json = JSON.parse(dataBuf.toString('utf8'))
+      if (json.cmd === 'DANMU_MSG') {
+        this.forwardDanmaku(json)
+      }
+    } catch {}
+  }
+
+  forwardDanmaku(cmdData) {
+    const info = cmdData.info
+    if (!info || !info[1]) return
+    const text = info[1]
+    const colorDecimal = info[0]?.[3] || 16777215
+    const colorHex = '#' + colorDecimal.toString(16).padStart(6, '0')
+    const mode = info[0]?.[1] || 1
+    const type = mode === 5 ? 'top' : mode === 4 ? 'bottom' : 'scroll'
+    this.sseSend('danmaku', { text, color: colorHex, type })
+  }
+
+  sseSend(event, data) {
+    try {
+      this.#sseRes.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    } catch {}
+  }
+
+  async attemptReconnect() {
+    this.#reconnectAttempts++
+    console.log(`[live-danmaku] Reconnect attempt ${this.#reconnectAttempts}/${this.#maxReconnect}`)
+    try {
+      await fetchWbiKeys()
+      const params = signWBI({ id: this.#roomId })
+      const authData = await fetchUrl(
+        'https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo',
+        params, {}
+      )
+      if (authData.code !== 0 || !authData.data?.token) {
+        console.error('[live-danmaku] Reconnect auth failed')
+        return
+      }
+      this.#token = authData.data.token
+      const hostList = authData.data.host_list
+      this.#hostInfo = hostList.find(h => h.wss_port) || hostList[0]
+      this.#reconnectAttempts = 0
+      this.connect()
+    } catch (e) {
+      console.error(`[live-danmaku] Reconnect error: ${e.message}`)
+    }
+  }
+
+  close() {
+    this.#closed = true
+    this.stopHeartbeat()
+    if (this.#ws) {
+      this.#ws.removeAllListeners()
+      this.#ws.close()
+      this.#ws = null
+    }
+  }
+}
 
 // ── 登录相关端点 ──
 
@@ -838,6 +1041,64 @@ router.get('/live-anchor', async (req, res) => {
   } catch (e) {
     console.error('Live anchor error:', e.message)
     res.status(500).json({ code: -500, message: e.message })
+  }
+})
+
+// 直播弹幕 SSE 代理
+router.get('/live-danmaku', optionalAuth, async (req, res) => {
+  const { room_id, buvid3 } = req.query
+  if (!room_id) return res.status(400).json({ code: -400, message: 'room_id required' })
+
+  try {
+    await fetchWbiKeys()
+    const params = signWBI({ id: parseInt(room_id) })
+    const cookieStr = getCookiesString(req.user?.id, buvid3)
+    const authData = await fetchUrl(
+      'https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo',
+      params, cookieStr ? { cookies: cookieStr } : {}
+    )
+
+    if (authData.code !== 0 || !authData.data?.token || !authData.data?.host_list?.length) {
+      console.error('[live-danmaku] getDanmuInfo failed:', authData.code, authData.message)
+      return res.status(502).json({ code: -502, message: authData?.message || 'Failed to get danmu auth info' })
+    }
+
+    const token = authData.data.token
+    const hostList = authData.data.host_list
+    const hostInfo = hostList.find(h => h.wss_port) || hostList[0]
+
+    // uid: 已登录用 DedeUserID，未登录为 0
+    let uid = 0
+    if (req.user?.id) {
+      const cred = getBilibiliCredentials(req.user.id)
+      if (cred?.cookies?.DedeUserID) uid = parseInt(cred.cookies.DedeUserID) || 0
+    }
+
+    // SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders()
+
+    res.write(`event: connected\ndata: ${JSON.stringify({ room_id: parseInt(room_id) })}\n\n`)
+
+    const manager = new LiveDanmakuManager(parseInt(room_id), uid, token, hostInfo, res)
+    manager.connect()
+
+    // SSE 客户端断开 → 关闭 B站 WS 连接
+    req.on('close', () => {
+      console.log(`[live-danmaku] SSE client disconnected for room ${room_id}`)
+      manager.close()
+    })
+  } catch (e) {
+    console.error('[live-danmaku] Setup error:', e.message)
+    if (!res.headersSent) {
+      res.status(500).json({ code: -500, message: e.message })
+    } else {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: e.message })}\n\n`)
+      res.end()
+    }
   }
 })
 
