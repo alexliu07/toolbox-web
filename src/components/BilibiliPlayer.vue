@@ -339,8 +339,8 @@ function initHlsPlayer(url) {
         dp.value.video.play().catch(() => {})
       })
       hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-        console.error('HLS error:', data.type, data.details)
         if (data.fatal) {
+          console.error('HLS fatal error:', data.type, data.details)
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hlsInstance.startLoad()
           else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hlsInstance.recoverMediaError()
         }
