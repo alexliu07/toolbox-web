@@ -63,7 +63,60 @@ let hlsInstance = null
 let liveDanmakuSource = null
 let danmakuCleanupTimer = null
 
-// 收藏夹弹窗
+// 侧栏标签页
+const sidebarTab = ref('info')
+
+// 评论状态
+const comments = ref([])
+const commentPage = ref(1)
+const commentTotal = ref(0)
+const commentSort = ref(0) // 0=时间 1=点赞 2=回复
+const commentsLoading = ref(false)
+const commentPageSize = 20
+
+// ── 评论 ──
+async function fetchComments() {
+  if (!props.aid) return
+  commentsLoading.value = true
+  try {
+    const res = await biliFetch(`/api/bilibili/comments?type=1&oid=${props.aid}&pn=${commentPage.value}&ps=${commentPageSize}&sort=${commentSort.value}`)
+    const data = await res.json()
+    if (data.code === 0 && data.data) {
+      comments.value = data.data.replies || []
+      commentTotal.value = data.data.page?.count || 0
+    } else {
+      comments.value = []
+      commentTotal.value = 0
+    }
+  } catch (e) {
+    console.warn('Failed to fetch comments:', e)
+    comments.value = []
+    commentTotal.value = 0
+  }
+  commentsLoading.value = false
+}
+
+function switchCommentTab() {
+  sidebarTab.value = 'comments'
+  if (comments.value.length === 0) fetchComments()
+}
+
+function commentTotalPages() {
+  return Math.ceil(commentTotal.value / commentPageSize) || 1
+}
+
+function formatCommentTime(ctime) {
+  if (!ctime) return ''
+  const now = Math.floor(Date.now() / 1000)
+  const diff = now - ctime
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
+  if (diff < 2592000) return `${Math.floor(diff / 86400)}天前`
+  const d = new Date(ctime * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const showFavModal = ref(false)
 const favFolders = ref([])
 const favFoldersLoading = ref(false)
@@ -602,14 +655,67 @@ onUnmounted(() => {
       <div ref="playerContainerRef" class="nplayer-container"></div>
       <div class="video-sidebar" :class="{ collapsed: infoCollapsed }">
         <div class="sidebar-toggle-bar">
-          <button class="sidebar-toggle" @click="infoCollapsed = !infoCollapsed" :title="infoCollapsed ? '展开信息' : '收起信息'">
+          <button class="sidebar-toggle" @click="infoCollapsed = !infoCollapsed; if (infoCollapsed) sidebarTab = 'info'" :title="infoCollapsed ? '展开信息' : '收起信息'">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline v-if="infoCollapsed" points="15 18 9 12 15 6"/>
               <polyline v-else points="9 18 15 12 9 6"/>
             </svg>
           </button>
+          <div v-if="!infoCollapsed && !props.isLive && aid" class="sidebar-tabs">
+            <button class="sidebar-tab" :class="{ active: sidebarTab === 'info' }" @click="sidebarTab = 'info'">简介</button>
+            <button class="sidebar-tab" :class="{ active: sidebarTab === 'comments' }" @click="switchCommentTab()">评论</button>
+          </div>
         </div>
         <template v-if="!infoCollapsed">
+          <!-- 评论页面 -->
+          <template v-if="sidebarTab === 'comments' && !props.isLive">
+            <div class="comment-sort-bar">
+              <button class="comment-sort-btn" :class="{ active: commentSort === 0 }" @click="commentSort = 0; commentPage = 1; fetchComments()">最新</button>
+              <button class="comment-sort-btn" :class="{ active: commentSort === 1 }" @click="commentSort = 1; commentPage = 1; fetchComments()">最热</button>
+              <span class="comment-total">{{ formatCount(commentTotal) }}条评论</span>
+            </div>
+            <div v-if="commentsLoading" class="comment-loading-wrap">
+              <div class="loading-spinner"></div>
+              <span>加载评论...</span>
+            </div>
+            <template v-else>
+              <div class="comment-list">
+                <div v-if="comments.length === 0" class="comment-empty">暂无评论</div>
+                <div v-for="reply in comments" :key="reply.rpid" class="comment-item">
+                  <img :src="proxyAvatar(reply.member?.avatar)" class="comment-avatar" />
+                  <div class="comment-body">
+                    <div class="comment-header">
+                      <span class="comment-name">{{ reply.member?.uname }}</span>
+                      <span class="comment-time">{{ formatCommentTime(reply.ctime) }}</span>
+                    </div>
+                    <div class="comment-content">{{ reply.content?.message }}</div>
+                    <div v-if="reply.content?.pictures?.length" class="comment-images">
+                      <img v-for="(pic, pi) in reply.content.pictures" :key="pi" :src="`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`" class="comment-img" @click="window.open(`/api/bilibili/image?url=${encodeURIComponent(pic.img_src)}`, '_blank')" />
+                    </div>
+                    <div class="comment-meta">
+                      <span class="comment-like">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                        {{ formatCount(reply.like) }}
+                      </span>
+                      <span v-if="reply.count" class="comment-reply-count">{{ reply.count }}回复</span>
+                      <span v-if="reply.floor" class="comment-floor">#{{ reply.floor }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="commentTotal > commentPageSize" class="comment-pagination">
+                <button class="comment-page-btn" :disabled="commentPage <= 1" @click="commentPage--; fetchComments()">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span class="comment-page-info">{{ commentPage }} / {{ commentTotalPages() }}</span>
+                <button class="comment-page-btn" :disabled="commentPage >= commentTotalPages()" @click="commentPage++; fetchComments()">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+            </template>
+          </template>
+          <!-- 信息页面 -->
+          <template v-else>
           <!-- 直播信息 -->
           <template v-if="props.isLive">
             <div v-if="anchorInfo" class="info-up">
@@ -723,6 +829,7 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+          </template><!-- close info page -->
         </template>
       </div>
     </template>
@@ -1196,5 +1303,234 @@ onUnmounted(() => {
 .fav-modal-confirm:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* 侧栏标签 */
+.sidebar-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 8px;
+  flex: 1;
+}
+
+.sidebar-tab {
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-tab:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.sidebar-tab.active {
+  color: #00a1d6;
+  background: rgba(0, 161, 214, 0.12);
+  font-weight: 600;
+}
+
+/* 评论排序 */
+.comment-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.comment-sort-btn {
+  padding: 3px 8px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.12s;
+}
+
+.comment-sort-btn.active {
+  color: #00a1d6;
+  font-weight: 600;
+}
+
+.comment-total {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* 评论列表 */
+.comment-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comment-list::-webkit-scrollbar { width: 4px; }
+.comment-list::-webkit-scrollbar-track { background: transparent; }
+.comment-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 2px; }
+
+.comment-loading-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
+.comment-empty {
+  text-align: center;
+  padding: 40px 0;
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 13px;
+}
+
+.comment-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+
+.comment-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.comment-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.comment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.comment-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.comment-name {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-time {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.comment-content {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.5;
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.comment-images {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  overflow-x: auto;
+}
+
+.comment-img {
+  width: 60px;
+  height: 60px;
+  border-radius: 4px;
+  object-fit: cover;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.comment-like {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.comment-reply-count {
+  font-size: 11px;
+  color: rgba(0, 161, 214, 0.6);
+}
+
+.comment-floor {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* 评论翻页 */
+.comment-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.comment-page-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  padding: 0;
+}
+
+.comment-page-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.comment-page-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.comment-page-info {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
 }
 </style>
