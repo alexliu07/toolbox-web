@@ -376,7 +376,7 @@ function connectLiveDanmaku() {
     try {
       const data = JSON.parse(e.data)
       if (dp.value?.danmaku) {
-        dp.value.danmaku.send({ text: data.text, color: data.color, type: data.type })
+        dp.value.danmaku.addItem({ text: data.text, color: data.color, type: data.type, time: dp.value.video?.currentTime || 0, force: true })
       }
     } catch {}
   })
